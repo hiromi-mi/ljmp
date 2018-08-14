@@ -46,6 +46,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <fcntl.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -55,6 +56,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <termios.h>
+#include <wchar.h>
 
 /** defines ***/
 #define LJMP_VERSION "0.0.2"
@@ -165,6 +167,7 @@ void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback) (char *, int));
 
+/*** unicode support ***/
 /*** terminal ***/
 
 void die(const char *s) {
@@ -469,13 +472,48 @@ void editorSelectSyntaxHighlight() {
 int editorRowCxToRx(erow *row, int cx) {
    int rx = 0;
    int j;
+   int width;
+   wchar_t chr;
    for (j = 0;j < cx; j++) {
       if (row->chars[j] == '\t') {
 	 // タブ文字
 	 // ここの -1 は rx++ があるから
 	 rx += (LJMP_TAB_STOP - 1) - (rx % LJMP_TAB_STOP);
       }
-      rx++;
+
+      // UTF-8 への対応
+      // コードポイントのバイト数 see utf-8 (7)
+      if ((row->chars[j] & 0x80) == 0) { // 0xxxxxxx
+	 chr = row->chars[j];
+      } else if ((row->chars[j] & 0xE0) == 0xC0) {
+	 // 110xxxxx
+	 chr = ((row->chars[j] & 0x1F) << 6) + (row->chars[j+1] & 0x3F);
+	 j += 1;
+      } else if ((row->chars[j] & 0xF0) == 0xE0) {
+	 // 1110xxxx
+	 chr = ((row->chars[j] & 0x0F) << 12) +
+	    ((row->chars[j+1] & 0x3F) << 6) +
+	    (row->chars[j+2] & 0x3F);
+	 j += 2;
+      } else if ((row->chars[j] & 0xF8) == 0xF0) {
+	 // 11110xxx
+	 chr = ((row->chars[j] & 0x07) << 18) +
+	    ((row->chars[j+1] & 0x3F) << 12) +
+	    ((row->chars[j+2] & 0x3F) << 6) +
+	    (row->chars[j+3]);
+	 j += 3;
+      } else {
+	 // 不正なシーケンス
+	 puts("Incorrect Sequence.");
+	 exit(-2);
+      }
+      // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
+      // これが本来必要かもしれない
+      width = wcwidth(chr);
+      if (width >= 0) {
+	 rx += width;
+      }
+      // width < 0 when unprintable chars
    }
    return rx;
 }
@@ -484,6 +522,8 @@ int editorRowCxToRx(erow *row, int cx) {
 int editorRowRxToCx(erow *row, int rx) {
    int cur_rx = 0;
    int cx;
+   int width;
+   wchar_t chr;
    for (cx = 0; cx < row->size; cx++) {
       /* cx から rx への変換として加えていき...*/
       if (row->chars[cx] == '\t') {
@@ -493,6 +533,36 @@ int editorRowRxToCx(erow *row, int rx) {
       }
       cur_rx++;
 
+      // UTF-8 への対応
+      // コードポイントのバイト数 see utf-8 (7)
+      if ((row->chars[cx] & 0x80) == 0) { // 0xxxxxxx
+	 chr = row->chars[cx];
+      } else if ((row->chars[cx] & 0xE0) == 0xC0) {
+	 // 110xxxxx
+	 chr = ((row->chars[cx] & 0x1F) << 6) + (row->chars[cx+1] & 0x3F);
+	 cx += 1;
+      } else if ((row->chars[cx] & 0xF0) == 0xE0) {
+	 // 1110xxxx
+	 chr = ((row->chars[cx] & 0x0F) << 12) +
+	    ((row->chars[cx+1] & 0x3F) << 6) +
+	    (row->chars[cx+2] & 0x3F);
+	 cx += 2;
+      } else if ((row->chars[cx] & 0xF8) == 0xF0) {
+	 // 11110xxx
+	 chr = ((row->chars[cx] & 0x07) << 18) +
+	    ((row->chars[cx+1] & 0x3F) << 12) +
+	    ((row->chars[cx+2] & 0x3F) << 6) +
+	    (row->chars[cx+3]);
+	 cx += 3;
+      } else {
+	 // 不正なシーケンス
+	 puts("Incorrect Sequence.");
+	 exit(-2);
+      }
+      width = wcwidth(chr);
+      if (width >= 0) {
+	 cur_rx += width;
+      }
       // 必ずここでひろわれるはず: 超えたら返す
       if (cur_rx > rx) return cx;
    }
@@ -1175,6 +1245,8 @@ void editorProcessKeypress() {
 /*** init ***/
 
 void initEditor() {
+   // "" とすると、環境変数が参照される
+   setlocale(LC_ALL, "");
    E.cx = 0;
    E.cy = 0;
    E.rx = 0;
