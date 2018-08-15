@@ -120,6 +120,7 @@ typedef struct erow {
 struct editorConfig {
    int cx, cy; // current position within the file
    int rx; /* render の進み具合 */
+   int bx; /* バイナリ列としての文字位置 */
    int rowoff; // row offset: スクロールの天井にある位置
    int coloff; // col offset: スクロールの左端にある位置
    int screenrows; // 端末(ry
@@ -468,7 +469,57 @@ void editorSelectSyntaxHighlight() {
 
 /*** row operations ***/
 
-// cx -> rx
+int editorRowCxToBxRx(erow *row, const int cx, int* save_bx, int* save_rx) {
+   int bx = 0, rx = 0, cur_cx;
+   int width;
+   wchar_t chr;
+   for (cur_cx = 0; bx < row->size, cur_cx <= cx; cur_cx++) {
+      if (row->chars[bx] == '\t') {
+	 // タブ文字
+	 rx += (LJMP_TAB_STOP) - (rx % LJMP_TAB_STOP);
+	 bx += 1;
+	 continue;
+      }
+
+      // コードポイントのバイト数 see utf-8 (7)
+      if ((row->chars[bx] & 0x80) == 0) { // 0xxxxxxx
+	 chr = row->chars[bx];
+	 bx += 1;
+      } else if ((row->chars[bx] & 0xE0) == 0xC0) {
+	 // 110xxxxx
+	 chr = ((row->chars[bx] & 0x1F) << 6) + (row->chars[bx+1] & 0x3F);
+	 bx += 2;
+      } else if ((row->chars[bx] & 0xF0) == 0xE0) {
+	 // 1110xxxx
+	 chr = ((row->chars[bx] & 0x0F) << 12) +
+	    ((row->chars[bx+1] & 0x3F) << 6) +
+	    (row->chars[bx+2] & 0x3F);
+	 bx += 3;
+      } else if ((row->chars[bx] & 0xF8) == 0xF0) {
+	 // 11110xxx
+	 chr = ((row->chars[bx] & 0x07) << 18) +
+	    ((row->chars[bx+1] & 0x3F) << 12) +
+	    ((row->chars[bx+2] & 0x3F) << 6) +
+	    (row->chars[bx+3]);
+	 bx += 4;
+      } else {
+	 // Incorrect Sequence. Treat as Binary.
+	 bx += 1;
+      }
+      // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
+      // これが本来必要かもしれない
+      width = wcwidth(chr);
+      if (width >= 0) {
+	 rx += width;
+      }
+      // width < 0 when unprintable chars
+   }
+   *save_bx = bx;
+   *save_rx = rx;
+   return bx;
+}
+
+/*
 int editorRowCxToRx(erow *row, int cx) {
    int rx = 0;
    int j;
@@ -517,6 +568,7 @@ int editorRowCxToRx(erow *row, int cx) {
    }
    return rx;
 }
+*/
 
 // editorRowCxToRx の逆演算
 int editorRowRxToCx(erow *row, int rx) {
@@ -910,7 +962,8 @@ void abFree(struct abuf *ab) {
 void editorScroll() {
    E.rx = 0;
    if (E.cy < E.numrows) {
-      E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
+      editorRowCxToBxRx(&E.row[E.cy], E.cx, &(E.bx), &(E.rx));
+      //E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
    }
 
    /* ウインドウの上 */
@@ -1055,6 +1108,7 @@ void editorRefreshScreen() {
    abAppend(&ab, "\x1b[2J", 4);
    abAppend(&ab, "\x1b[H", 3);
 
+   E.bx = E.cx;
    editorDrawRows(&ab);
    editorDrawStatusBar(&ab);
    editorDrawMessageBar(&ab);
@@ -1250,6 +1304,7 @@ void initEditor() {
    E.cx = 0;
    E.cy = 0;
    E.rx = 0;
+   E.bx = 0;
    E.numrows = 0; // 行数
    E.row = NULL; // 行そのものを持つポインタ
    E.dirty = 0;
