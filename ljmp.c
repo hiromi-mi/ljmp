@@ -42,6 +42,7 @@
 #define _BSD_SOURCE
 #define _GNU_SOURCE // to use getline(): GNU Extension
 
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -109,12 +110,14 @@ struct editorSyntax {
 /* 行 */
 typedef struct erow {
    int idx; // ファイル内でのindex
-   int size;
-   int rsize; // 実際に描画するテキスト
+   int bsize; // バイナリ的な長さ
+   int rsize; // 実際に描画するテキストの長さ
+   int csize; // 文字数
    char *chars; // 格納されたテキスト
    char *render; // 実際に描画するテキスト
    unsigned char *hl;
    int hl_open_comment;
+   int indentations; // インデント行数
 } erow;
 
 struct editorConfig {
@@ -473,7 +476,7 @@ int editorRowCxToBxRx(erow *row, const int cx, int* save_bx, int* save_rx) {
    int bx = 0, rx = 0, cur_cx;
    int width;
    wchar_t chr;
-   for (cur_cx = 0; bx < row->size, cur_cx <= cx; cur_cx++) {
+   for (cur_cx = 0; cur_cx < cx; cur_cx++) {
       if (row->chars[bx] == '\t') {
 	 // タブ文字
 	 rx += (LJMP_TAB_STOP) - (rx % LJMP_TAB_STOP);
@@ -513,10 +516,70 @@ int editorRowCxToBxRx(erow *row, const int cx, int* save_bx, int* save_rx) {
 	 rx += width;
       }
       // width < 0 when unprintable chars
+      if ( bx >= row->bsize) {
+	 break;
+      }
    }
-   *save_bx = bx;
-   *save_rx = rx;
+   if (save_bx != NULL) {
+      *save_bx = bx;
+   }
+   if (save_rx != NULL) {
+      *save_rx = rx;
+   }
    return bx;
+}
+
+int editorRowBxToCx(erow *row, int bx) {
+   int cur_cx = 0;
+   int cur_bx = 0;
+   int width;
+   wchar_t chr;
+   int rx = 0;
+   for (cur_cx = 0;; cur_cx++) {
+      if (row->chars[cur_bx] == '\t') {
+	 // タブ文字
+	 rx += (LJMP_TAB_STOP) - (rx % LJMP_TAB_STOP);
+	 cur_bx += 1;
+	 continue;
+      }
+
+      // コードポイントのバイト数 see utf-8 (7)
+      if ((row->chars[cur_bx] & 0x80) == 0) { // 0xxxxxxx
+	 chr = row->chars[cur_bx];
+	 cur_bx += 1;
+      } else if ((row->chars[cur_bx] & 0xE0) == 0xC0) {
+	 // 110xxxxx
+	 chr = ((row->chars[cur_bx] & 0x1F) << 6) + (row->chars[cur_bx+1] & 0x3F);
+	 cur_bx += 2;
+      } else if ((row->chars[cur_bx] & 0xF0) == 0xE0) {
+	 // 1110xxxx
+	 chr = ((row->chars[cur_bx] & 0x0F) << 12) +
+	    ((row->chars[cur_bx+1] & 0x3F) << 6) +
+	    (row->chars[cur_bx+2] & 0x3F);
+	 cur_bx += 3;
+      } else if ((row->chars[cur_bx] & 0xF8) == 0xF0) {
+	 // 11110xxx
+	 chr = ((row->chars[cur_bx] & 0x07) << 18) +
+	    ((row->chars[cur_bx+1] & 0x3F) << 12) +
+	    ((row->chars[cur_bx+2] & 0x3F) << 6) +
+	    (row->chars[cur_bx+3]);
+	 cur_bx += 4;
+      } else {
+	 // Incorrect Sequence. Treat as Binary.
+	 cur_bx += 1;
+      }
+      // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
+      // これが本来必要かもしれない
+      width = wcwidth(chr);
+      if (width >= 0) {
+	 rx += width;
+      }
+      // width < 0 when unprintable chars
+      if ( cur_bx >= bx) {
+	 break;
+      }
+   }
+   return cur_cx;
 }
 
 /*
@@ -576,7 +639,7 @@ int editorRowRxToCx(erow *row, int rx) {
    int cx;
    int width;
    wchar_t chr;
-   for (cx = 0; cx < row->size; cx++) {
+   for (cx = 0; cx < row->bsize; cx++) {
       /* cx から rx への変換として加えていき...*/
       if (row->chars[cx] == '\t') {
 	 // タブ文字
@@ -626,17 +689,23 @@ int editorRowRxToCx(erow *row, int rx) {
 void editorUpdateRow(erow *row) {
    int tabs = 0;
    int j;
-   for (j=0;j < row->size; j++) {
+   row->indentations = 0;
+   for (j=0;j < row->bsize; j++) {
       // タブの数を数える
-      if (row->chars[j] == '\t') tabs++;
+      if (row->chars[j] == '\t') {
+	 if (j == row->indentations) {
+	    row->indentations++;
+	 }
+	 tabs++;
+      }
    }
    free(row->render);
-   // 8 - 1 = 7 (1 分はすでにrow->size として確保してある)
-   row->render = malloc(row->size + tabs*(LJMP_TAB_STOP - 1) + 1);
+   // 8 - 1 = 7 (1 分はすでにrow->bsize として確保してある)
+   row->render = malloc(row->bsize + tabs*(LJMP_TAB_STOP - 1) + 1);
 
    int idx = 0;
    // 実体から表示に割り当てる
-   for (j=0;j < row->size; j++) {
+   for (j=0;j < row->bsize; j++) {
       if (row->chars[j] == '\t') {
 	 // タブが来たら" "で埋める. 丁度いい数になるまで合わせる
 	 row->render[idx++] = ' ';
@@ -647,7 +716,9 @@ void editorUpdateRow(erow *row) {
    }
    row->render[idx] = '\0';
    row->rsize = idx;
+   row->csize = editorRowBxToCx(row, row->bsize);
 
+   editorRowCxToBxRx(&E.row[E.cy], E.cx, &(E.bx), &(E.rx));
    editorUpdateSyntax(row);
 }
 
@@ -661,12 +732,14 @@ void editorInsertRow(int at, char *s, size_t len) {
    for (int j = at + 1; j <= E.numrows; j++) E.row[j].idx++;
 
    E.row[at].idx = at;
-   E.row[at].size = len;
+   E.row[at].indentations = 0;
+   E.row[at].bsize = len;
    E.row[at].chars = malloc(len + 1);
    memcpy(E.row[at].chars, s, len);
    E.row[at].chars[len] = '\0';
 
    E.row[at].rsize = 0;
+   E.row[at].csize = 0;
    E.row[at].render = NULL;
    E.row[at].hl = NULL;
    E.row[at].hl_open_comment = 0;
@@ -693,22 +766,22 @@ void editorDelRow(int at) {
 }
 
 void editorRowAppendString(erow *row, char *s, size_t len) {
-   row->chars = realloc(row->chars, row->size + len + 1);
-   // row->size 以降に文字列をつけ加える
-   memcpy(&row->chars[row->size], s, len);
-   row->size += len;
-   row->chars[row->size] = '\0';
+   row->chars = realloc(row->chars, row->bsize + len + 1);
+   // row->bsize 以降に文字列をつけ加える
+   memcpy(&row->chars[row->bsize], s, len);
+   row->bsize += len;
+   row->chars[row->bsize] = '\0';
    editorUpdateRow(row);
    E.dirty++;
 }
 
 void editorRowInsertChar(erow *row, int at, char c) {
    // 文字を挿入するindex
-   if (at < 0 || at > row->size) at = row->size;
-   row->chars = realloc(row->chars, row->size + 2); // 端っこ及び隣
+   if (at < 0 || at > row->bsize) at = row->bsize;
+   row->chars = realloc(row->chars, row->bsize + 2); // 端っこ及び隣
    // memcpy とは違い被ってても大丈夫らしい
-   memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
-   row->size++;
+   memmove(&row->chars[at + 1], &row->chars[at], row->bsize - at);
+   row->bsize++;
    row->chars[at] = c;
    editorUpdateRow(row);
    E.dirty++;
@@ -716,11 +789,16 @@ void editorRowInsertChar(erow *row, int at, char c) {
 
 void editorRowDelChar(erow *row, int at) {
    // 1文字消す
-   if (at < 0 || at > row->size) return;
-   memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
-   row->size--;
-   editorUpdateRow(row);
-   E.dirty++;
+   if (at < 0 || at > row->bsize) return;
+   // 文字列からバイナリへの変換
+   int bx_before = editorRowCxToBxRx(row, at, NULL, NULL);
+   int bx_after = editorRowCxToBxRx(row, at+1, NULL, NULL);
+   if ( bx_before != bx_after) {
+      memmove(&row->chars[bx_before], &row->chars[bx_after], row->bsize - at);
+      row->bsize -= (bx_after - bx_before);
+      editorUpdateRow(row);
+      E.dirty++;
+   }
 }
 
 /*** editor operations ***/
@@ -740,17 +818,20 @@ void editorInsertNewline() {
    } else {
       erow *row = &E.row[E.cy];
       // E.cx 以降の内容を次の行に挿入
-      editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
+      editorInsertRow(E.cy + 1, &row->chars[E.cx], row->bsize - E.bx+1);
       // editorInsertRow によって realloc が呼ばれポインタの位置が移動した
       row = &E.row[E.cy];
-      row->size = E.cx;
-      row->chars[row->size] = '\0';
+      for (int i=0; i < E.row[E.cy].indentations; i++) {
+	 editorRowInsertChar(&E.row[E.cy+1], 0, '\t');
+      }
+      row->bsize = E.bx;
+      row->chars[row->bsize] = '\0';
       // 更新
       editorUpdateRow(row);
    }
    // 次の行に移る
    E.cy++;
-   E.cx = 0;
+   E.cx = E.row[E.cy].indentations;
 }
 
 void editorDelChar() {
@@ -764,9 +845,9 @@ void editorDelChar() {
       editorRowDelChar(row, E.cx - 1);
       E.cx--;
    } else {
-      E.cx = E.row[E.cy-1].size;
+      E.cx = E.row[E.cy-1].bsize;
       // 前の行に残りを残して
-      editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size);
+      editorRowAppendString(&E.row[E.cy - 1], row->chars, row->bsize);
       // その行を消す
       editorDelRow(E.cy);
       E.cy--;
@@ -781,7 +862,7 @@ char *editorRowToString(int *buflen) {
    int totlen = 0;
    int j;
    for (j=0;j < E.numrows; j++) {
-      totlen += E.row[j].size + 1;
+      totlen += E.row[j].bsize + 1;
    }
    // 長さを知らせる
    *buflen = totlen;
@@ -789,8 +870,8 @@ char *editorRowToString(int *buflen) {
    char *buf = malloc(totlen);
    char *p = buf; // 全バッファを繋げる
    for (j=0;j < E.numrows; j++) {
-      memcpy(p, E.row[j].chars, E.row[j].size);
-      p += E.row[j].size;
+      memcpy(p, E.row[j].chars, E.row[j].bsize);
+      p += E.row[j].bsize;
       *p = '\n';
       p++;
    }
@@ -1108,7 +1189,6 @@ void editorRefreshScreen() {
    abAppend(&ab, "\x1b[2J", 4);
    abAppend(&ab, "\x1b[H", 3);
 
-   E.bx = E.cx;
    editorDrawRows(&ab);
    editorDrawStatusBar(&ab);
    editorDrawMessageBar(&ab);
@@ -1187,16 +1267,17 @@ void editorMoveCursor(int key) {
 	 } else if (E.cy > 0) {
 	    // 前の行の最後に移る
 	    E.cy--;
-	    E.cx = E.row[E.cy].size;
+	    E.cx = E.row[E.cy].bsize;
 	 }
 	 break;
       case ARROW_RIGHT:
 	 // 横スクロール幅の制限
 	 // 日本語が2バイトと解釈されている模様な影響で1バイト文字の範囲でしか動作しない
-	 if (row && E.cx < row->size) {
-	    printf("%d %d\n", E.cx, row->size);
+	 if (row && E.cx < row->csize) {
+	    editorSetStatusMessage("%d %d", E.cx, row->csize);
 	    E.cx++;
-	 } else if (row && E.cx == row->size) {
+	 } else if (row && E.cx == row->csize) {
+	    editorSetStatusMessage("%d %d", E.cx, row->csize);
 	    E.cy++;
 	    E.cx = 0;
 	 }
@@ -1216,7 +1297,7 @@ void editorMoveCursor(int key) {
    // 長い行から短い行へ移ったときの処理
    // 短い行の長さに戻す
    row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
-   int rowlen = row ? row->size : 0;
+   int rowlen = row ? row->bsize : 0;
    if (E.cx > rowlen) {
       E.cx = rowlen;
    }
@@ -1251,7 +1332,7 @@ void editorProcessKeypress() {
 	 break;
       case END_KEY:
 	 if (E.cy < E.numrows) {
-	    E.cx = E.row[E.cy].size;
+	    E.cx = E.row[E.cy].rsize;
 	 }
 	 break;
 
