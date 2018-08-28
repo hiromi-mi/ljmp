@@ -582,57 +582,6 @@ int editorRowBxToCx(erow *row, int bx) {
    return cur_cx;
 }
 
-/*
-int editorRowCxToRx(erow *row, int cx) {
-   int rx = 0;
-   int j;
-   int width;
-   wchar_t chr;
-   for (j = 0;j < cx; j++) {
-      if (row->chars[j] == '\t') {
-	 // タブ文字
-	 // ここの -1 は rx++ があるから
-	 rx += (LJMP_TAB_STOP - 1) - (rx % LJMP_TAB_STOP);
-      }
-
-      // UTF-8 への対応
-      // コードポイントのバイト数 see utf-8 (7)
-      if ((row->chars[j] & 0x80) == 0) { // 0xxxxxxx
-	 chr = row->chars[j];
-      } else if ((row->chars[j] & 0xE0) == 0xC0) {
-	 // 110xxxxx
-	 chr = ((row->chars[j] & 0x1F) << 6) + (row->chars[j+1] & 0x3F);
-	 j += 1;
-      } else if ((row->chars[j] & 0xF0) == 0xE0) {
-	 // 1110xxxx
-	 chr = ((row->chars[j] & 0x0F) << 12) +
-	    ((row->chars[j+1] & 0x3F) << 6) +
-	    (row->chars[j+2] & 0x3F);
-	 j += 2;
-      } else if ((row->chars[j] & 0xF8) == 0xF0) {
-	 // 11110xxx
-	 chr = ((row->chars[j] & 0x07) << 18) +
-	    ((row->chars[j+1] & 0x3F) << 12) +
-	    ((row->chars[j+2] & 0x3F) << 6) +
-	    (row->chars[j+3]);
-	 j += 3;
-      } else {
-	 // 不正なシーケンス
-	 puts("Incorrect Sequence.");
-	 exit(-2);
-      }
-      // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
-      // これが本来必要かもしれない
-      width = wcwidth(chr);
-      if (width >= 0) {
-	 rx += width;
-      }
-      // width < 0 when unprintable chars
-   }
-   return rx;
-}
-*/
-
 // editorRowCxToRx の逆演算
 int editorRowRxToCx(erow *row, int rx) {
    int cur_rx = 0;
@@ -808,7 +757,7 @@ void editorInsertChar(int c) {
       // 行を追記
       editorInsertRow(E.numrows, "", 0);
    }
-   editorRowInsertChar(&E.row[E.cy], E.cx, c);
+   editorRowInsertChar(&E.row[E.cy], E.bx, c);
    E.cx++;
 }
 
@@ -818,7 +767,7 @@ void editorInsertNewline() {
    } else {
       erow *row = &E.row[E.cy];
       // E.cx 以降の内容を次の行に挿入
-      editorInsertRow(E.cy + 1, &row->chars[E.cx], row->bsize - E.bx+1);
+      editorInsertRow(E.cy + 1, &row->chars[E.bx], row->bsize - E.bx);
       // editorInsertRow によって realloc が呼ばれポインタの位置が移動した
       row = &E.row[E.cy];
       for (int i=0; i < E.row[E.cy].indentations; i++) {
@@ -845,7 +794,7 @@ void editorDelChar() {
       editorRowDelChar(row, E.cx - 1);
       E.cx--;
    } else {
-      E.cx = E.row[E.cy-1].bsize;
+      E.cx = E.row[E.cy-1].csize;
       // 前の行に残りを残して
       editorRowAppendString(&E.row[E.cy - 1], row->chars, row->bsize);
       // その行を消す
@@ -1267,7 +1216,7 @@ void editorMoveCursor(int key) {
 	 } else if (E.cy > 0) {
 	    // 前の行の最後に移る
 	    E.cy--;
-	    E.cx = E.row[E.cy].bsize;
+	    E.cx = E.row[E.cy].csize;
 	 }
 	 break;
       case ARROW_RIGHT:
@@ -1297,7 +1246,7 @@ void editorMoveCursor(int key) {
    // 長い行から短い行へ移ったときの処理
    // 短い行の長さに戻す
    row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
-   int rowlen = row ? row->bsize : 0;
+   int rowlen = row ? row->csize : 0;
    if (E.cx > rowlen) {
       E.cx = rowlen;
    }
