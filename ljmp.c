@@ -575,7 +575,7 @@ int editorRowBxToCx(erow *row, int bx) {
 	 rx += width;
       }
       // width < 0 when unprintable chars
-      if ( cur_bx >= bx) {
+      if ( cur_bx > bx) {
 	 break;
       }
    }
@@ -1213,6 +1213,7 @@ void editorMoveCursor(int key) {
       case ARROW_LEFT:
 	 if (E.cx != 0) {
 	    E.cx--;
+	    editorSetStatusMessage("%d %d", E.cx, row->csize);
 	 } else if (E.cy > 0) {
 	    // 前の行の最後に移る
 	    E.cy--;
@@ -1221,14 +1222,13 @@ void editorMoveCursor(int key) {
 	 break;
       case ARROW_RIGHT:
 	 // 横スクロール幅の制限
-	 // 日本語が2バイトと解釈されている模様な影響で1バイト文字の範囲でしか動作しない
 	 if (row && E.cx < row->csize) {
-	    editorSetStatusMessage("%d %d", E.cx, row->csize);
 	    E.cx++;
-	 } else if (row && E.cx == row->csize) {
 	    editorSetStatusMessage("%d %d", E.cx, row->csize);
+	 } else if (row && E.cx == row->csize) {
 	    E.cy++;
 	    E.cx = 0;
+	    editorSetStatusMessage("%d %d", E.cx, row->csize);
 	 }
 	 break;
       case ARROW_UP:
