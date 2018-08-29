@@ -99,20 +99,55 @@ enum editorHighlight {
 /*** prototypes ***/
 
 // ほんとうに「バッファ」 write() 溜め
-struct abuf {
+typedef struct abuf {
    char *b;
    int len;
-};
+} abuf;
 
 #define ABUF_INIT                                                              \
    { NULL, 0 }
 
+typedef struct undoAPI {
+   int old_cx;
+   int new_cx;
+   int cy;
+   int old_cy;
+   int new_cy;
+   struct abuf *old_buf;
+   struct abuf *new_buf;
+} undoAPI;
+
+#define UNDOAPI_INIT                                                           \
+   { 0, 0, 0, 0, 0, NULL, NULL }
+
+typedef struct undoStack {
+   undoAPI **api;
+   int length;
+   int max_length;
+   int cy;
+} undoStack;
+
+void die(const char *s);
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
-void editorUndoInit();
+void undoInit();
+undoAPI *undoStackGetLast();
+undoAPI *undoStackPop();
+void undoStackPush(undoAPI *undo);
 void abAppend(struct abuf *ab, const char *s, int len);
 void abFree(struct abuf *ab);
+void abAssign(struct abuf *ab, const char *s, int len);
+
+/*** allocate ***/
+
+void *safe_realloc(void *ptr, size_t cnt) {
+   void *result = realloc(ptr, cnt);
+   if (result == NULL) {
+      die("realloc");
+   }
+   return result;
+}
 
 /*** data ***/
 
@@ -125,23 +160,6 @@ struct editorSyntax {
    char *multiline_comment_end;
    int flags; // 何をハイライトさせるか. bit flag.
 };
-
-typedef struct undoAPI {
-   int old_cx;
-   int new_cx;
-   int cy;
-   int old_cy;
-   int new_cy;
-   struct abuf old_buf;
-   struct abuf new_buf;
-} undoAPI;
-
-typedef struct undoStack {
-   undoAPI **api;
-   int length;
-   int max_length;
-   int cy;
-} undoStack;
 
 /* 行 */
 typedef struct erow {
@@ -364,7 +382,7 @@ int is_separator(int c) {
 }
 
 void editorUpdateSyntax(erow *row) {
-   row->hl = realloc(row->hl, row->rsize);
+   row->hl = safe_realloc(row->hl, row->rsize);
    // 何もなければHL_NORMAL 扱い
    memset(row->hl, HL_NORMAL, row->rsize);
 
@@ -777,7 +795,7 @@ void editorInsertRow(int at, char *s, size_t len) {
    if (at < 0 || at > E.numrows)
       return;
 
-   E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+   E.row = safe_realloc(E.row, sizeof(erow) * (E.numrows + 1));
    memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
    // その後の行について index を改める
    for (int j = at + 1; j <= E.numrows; j++)
@@ -822,7 +840,7 @@ void editorDelRow(int at) {
 }
 
 void editorRowAppendString(erow *row, char *s, size_t len) {
-   row->chars = realloc(row->chars, row->bsize + len + 1);
+   row->chars = safe_realloc(row->chars, row->bsize + len + 1);
    // row->bsize 以降に文字列をつけ加える
    memcpy(&row->chars[row->bsize], s, len);
    row->bsize += len;
@@ -835,7 +853,7 @@ void editorRowInsertChar(erow *row, int at, char c) {
    // 文字を挿入するindex
    if (at < 0 || at > row->bsize)
       at = row->bsize;
-   row->chars = realloc(row->chars, row->bsize + 2); // 端っこ及び隣
+   row->chars = safe_realloc(row->chars, row->bsize + 2); // 端っこ及び隣
    // memcpy とは違い被ってても大丈夫らしい
    memmove(&row->chars[at + 1], &row->chars[at], row->bsize - at);
    row->bsize++;
@@ -870,12 +888,32 @@ void editorInsertChar(int c) {
    editorRowInsertChar(&E.row[E.cy], E.bx, c);
    E.cx++;
    // undo 対象に追加
-   if (E.undo.cy != E.cy) {
+   if (E.undoStack->cy != E.cy) {
+      /*
       E.undo.cy = E.cy;
       E.undo.old_cx = E.cx - 1;
       E.undo.new_cx = E.cx;
+      E.undoStack->cy = E.cy;
+      */
+      undoAPI *api = malloc(sizeof(undoAPI));
+      api->cy = E.cy;
+      api->old_cx = E.cx - 1;
+      api->new_cx = E.cx;
+      api->new_cy = 10;
+      api->old_cy = 9;
+      api->old_buf = malloc(sizeof(abuf));
+      abAppend(api->old_buf, E.row[E.cy].chars,
+               E.row[E.cy].bsize - 1); // 1バイト加わったから
+      // abDeleteLastByte(api->old_buf);
+      api->new_buf = malloc(sizeof(abuf));
+      abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
+      undoStackPush(api);
    } else {
-      E.undo.new_cx += 1;
+      // E.undo.new_cx += 1;
+      abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
+               E.row[E.cy].bsize);
+      // undoStackGetLast()->new_cx += 1;
+      // E.undoStack->api[E.undoStack->length - 1]->new_cx += 1;
    }
 }
 
@@ -888,63 +926,65 @@ void editorInsertNewline() {
       erow *row = &E.row[E.cy];
       // E.cx 以降の内容を次の行に挿入
       editorInsertRow(E.cy + 1, &row->chars[E.bx], row->bsize - E.bx);
-      // editorInsertRow によって realloc が呼ばれポインタの位置が移動した
+      // editorInsertRow によって safe_realloc が呼ばれポインタの位置が移動した
       row = &E.row[E.cy];
 
-      // Automatic Indentation
-      // E.bx-1 としても、 E.cx > 0 より大丈夫
-      if (E.row[E.cy].chars[E.bx - 1] == '{') {
-         E.row[E.cy + 1].indentations = E.row[E.cy].indentations + 1;
-      } else {
-         E.row[E.cy + 1].indentations = E.row[E.cy].indentations;
-      }
-
-      for (int i = 0; i < E.row[E.cy + 1].indentations; i++) {
-         editorRowInsertChar(&E.row[E.cy + 1], 0, '\t');
-      }
-      first_cx = E.row[E.cy + 1].indentations;
-
-      // Automatic Comment-out
-      char *scs = E.syntax->singleline_comment_start;
-
-      int scs_len = scs ? strlen(scs) : 0;
-      // 単一行コメントのsyntax 対応
-      if (scs_len && strncmp(&E.row[E.cy].chars[E.row[E.cy].indentations], scs,
-                             scs_len) == 0) {
-         int j = 0;
-         do {
-            editorRowInsertChar(&E.row[E.cy + 1],
-                                E.row[E.cy + 1].indentations + j, *scs);
-            j++;
-         } while (scs[j] != '\0');
-         // コメント開始の直後、こうやって1文字空をつくる
-         editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + j,
-                             ' ');
-         first_cx += j + 1;
-      }
-      if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
-         if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '*') {
-            // 複数行コメント
-            editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
-                                ' ');
-            editorRowInsertChar(&E.row[E.cy + 1],
-                                E.row[E.cy + 1].indentations + 1, '*');
+      if (E.syntax != NULL) {
+         // Automatic Indentation
+         // E.bx-1 としても、 E.cx > 0 より大丈夫
+         if (E.row[E.cy].chars[E.bx - 1] == '{') {
+            E.row[E.cy + 1].indentations = E.row[E.cy].indentations + 1;
+         } else {
+            E.row[E.cy + 1].indentations = E.row[E.cy].indentations;
          }
-         editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 2,
-                             ' ');
-         first_cx += 3;
-      }
-      if (E.row[E.cy].chars[E.row[E.cy].indentations] == ' ') {
-         if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '*') {
-            // 複数行コメントの継続
-            editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
-                                ' ');
-            editorRowInsertChar(&E.row[E.cy + 1],
-                                E.row[E.cy + 1].indentations + 1, '*');
+
+         for (int i = 0; i < E.row[E.cy + 1].indentations; i++) {
+            editorRowInsertChar(&E.row[E.cy + 1], 0, '\t');
          }
-         editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 2,
-                             ' ');
-         first_cx += 3;
+         first_cx = E.row[E.cy + 1].indentations;
+
+         // Automatic Comment-out
+         char *scs = E.syntax->singleline_comment_start;
+
+         int scs_len = scs ? strlen(scs) : 0;
+         // 単一行コメントのsyntax 対応
+         if (scs_len && strncmp(&E.row[E.cy].chars[E.row[E.cy].indentations],
+                                scs, scs_len) == 0) {
+            int j = 0;
+            do {
+               editorRowInsertChar(&E.row[E.cy + 1],
+                                   E.row[E.cy + 1].indentations + j, *scs);
+               j++;
+            } while (scs[j] != '\0');
+            // コメント開始の直後、こうやって1文字空をつくる
+            editorRowInsertChar(&E.row[E.cy + 1],
+                                E.row[E.cy + 1].indentations + j, ' ');
+            first_cx += j + 1;
+         }
+         if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
+            if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '*') {
+               // 複数行コメント
+               editorRowInsertChar(&E.row[E.cy + 1],
+                                   E.row[E.cy + 1].indentations, ' ');
+               editorRowInsertChar(&E.row[E.cy + 1],
+                                   E.row[E.cy + 1].indentations + 1, '*');
+            }
+            editorRowInsertChar(&E.row[E.cy + 1],
+                                E.row[E.cy + 1].indentations + 2, ' ');
+            first_cx += 3;
+         }
+         if (E.row[E.cy].chars[E.row[E.cy].indentations] == ' ') {
+            if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '*') {
+               // 複数行コメントの継続
+               editorRowInsertChar(&E.row[E.cy + 1],
+                                   E.row[E.cy + 1].indentations, ' ');
+               editorRowInsertChar(&E.row[E.cy + 1],
+                                   E.row[E.cy + 1].indentations + 1, '*');
+            }
+            editorRowInsertChar(&E.row[E.cy + 1],
+                                E.row[E.cy + 1].indentations + 2, ' ');
+            first_cx += 3;
+         }
       }
       row->bsize = E.bx;
       row->chars[row->bsize] = '\0';
@@ -967,6 +1007,8 @@ void editorDelChar() {
    erow *row = &E.row[E.cy];
    if (E.cx > 0) {
       editorRowDelChar(row, E.cx - 1);
+      abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
+               E.row[E.cy].bsize);
       E.cx--;
    } else {
       E.cx = E.row[E.cy - 1].csize;
@@ -1066,7 +1108,7 @@ void editorSave() {
    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 
    // undo を無効にする
-   editorUndoInit();
+   undoInit();
 }
 
 /*** find ***/
@@ -1156,11 +1198,13 @@ void editorFind() {
 void undoStackPush(undoAPI *undo) {
    if (E.undoStack->max_length <= E.undoStack->length) {
       // 領域そのものを増やす
-      int newlen = E.undoStack->length + 1;
-      E.undoStack = realloc(E.undoStack, sizeof(undoStack) * newlen);
+      int newlen = E.undoStack->length * 2 + 1;
+      E.undoStack->api =
+          safe_realloc(E.undoStack->api, sizeof(undoAPI *) * newlen);
       E.undoStack->max_length = newlen;
    }
-   E.undoStack->api[E.undoStack->length++] = undo;
+   E.undoStack->api[E.undoStack->length] = undo;
+   E.undoStack->length++;
    E.undoStack->cy = undo->cy;
 }
 
@@ -1173,43 +1217,63 @@ undoAPI *undoStackGetLast() {
 }
 
 undoAPI *undoStackPop() {
+   // 利用者側で free() することが想定されている
    if (E.undoStack->length == 0) {
       return NULL;
    } else {
       // 取ってきて長さごと減らす
-      undoAPI *api = E.undoStack->api[E.undoStack->length--];
-      undoAPI *latest = undoStackGetLast();
-      if (latest == NULL) {
+      E.undoStack->length--;
+      undoAPI *api = E.undoStack->api[E.undoStack->length];
+      if (E.undoStack->length == 0) {
          E.undoStack->cy = -1;
       } else {
-         E.undoStack->cy = latest->cy;
+         E.undoStack->cy = E.undoStack->api[E.undoStack->length - 1]->cy;
       }
       return api;
    }
 }
 
-void editorUndo() {
-   if (E.undo.cy >= 0) { // undo できる
-      for (int i = E.undo.new_cx - 1; i >= E.undo.old_cx; i--) {
-         editorRowDelChar(&E.row[E.undo.cy], i);
-      }
-      if (E.cy == E.undo.cy) {
-         // 同じ行にいるなら、元の位置に戻す
-         E.cx = E.undo.old_cx;
-      }
-      editorUndoInit();
-   }
+void undoAPIFree(undoAPI *api) {
+   abFree(api->old_buf);
+   abFree(api->new_buf);
+   free(api);
 }
 
-void editorUndoInit() {
+void editorUndo() {
+   // if (E.undo.cy >= 0) { // undo できる
+   undoAPI *api = undoStackPop();
+   if (api == NULL) {
+      editorSetStatusMessage("No more undo");
+      return;
+   }
+   /*
+   for (int i = api->new_cx - 1; i >= api->old_cx; i--) {
+      editorRowDelChar(&E.row[api->cy], i);
+   }
+   */
+   editorDelRow(api->cy);
+   editorInsertRow(api->cy, api->old_buf->b, api->old_buf->len);
+   // if (E.cy == api->cy) {
+   // 元の位置に戻す
+   E.cx = api->old_cx;
+   E.cy = api->cy;
+   //}
+   undoAPIFree(api);
+   //}
+}
+
+void undoInit() {
    E.undo.cy = -1;
    E.undo.old_cx = 0;
    E.undo.new_cx = 0;
 
    undoStack *stack;
    stack = malloc(sizeof(undoStack));
+   if (stack == NULL) {
+      die("malloc");
+   }
    stack->length = 0;
-   stack->max_length = 1;
+   stack->max_length = 0;
    stack->api = NULL;
    stack->cy = -1;
    E.undoStack = stack;
@@ -1237,12 +1301,25 @@ void editorPaste() {
 /*** append buffer ***/
 
 void abAppend(struct abuf *ab, const char *s, int len) {
-   char *new = realloc(ab->b, ab->len + len);
-   if (new == NULL)
-      return;
+   char *new = safe_realloc(ab->b, ab->len + len);
    memcpy(&new[ab->len], s, len);
    ab->b = new;
    ab->len += len;
+}
+
+void abAssign(struct abuf *ab, const char *s, int len) {
+   char *new = safe_realloc(ab->b, len);
+   memcpy(new, s, len);
+   ab->b = new;
+   ab->len = len;
+}
+
+void abDeleteLastByte(struct abuf *ab) {
+   // 1文字以上のときのみ消す
+   if (ab->len >= 1) {
+      ab->b[ab->len - 1] = '\0';
+      ab->len--;
+   }
 }
 
 void abFree(struct abuf *ab) { free(ab->b); }
@@ -1465,10 +1542,10 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
          // 制御文字でないようにするため, 128 以下 ( editorKey の1000
          // 以上でない)
       } else if (!iscntrl(c) && c < 128) {
-         // 溜められていく. 不足したら倍にして realloc
+         // 溜められていく. 不足したら倍にして safe_realloc
          if (buflen == bufsize - 1) {
             bufsize *= 2;
-            buf = realloc(buf, bufsize);
+            buf = safe_realloc(buf, bufsize);
          }
          // string にしておく
          buf[buflen++] = c;
@@ -1631,7 +1708,7 @@ void initEditor() {
    E.syntax = NULL;
    E.copybuf.b = NULL;
    E.copybuf.len = 0;
-   editorUndoInit();
+   undoInit();
 
    if (getWindowSize(&E.screenrows, &E.screencols) == -1)
       die("getWindowSize");
