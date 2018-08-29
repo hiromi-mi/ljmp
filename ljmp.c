@@ -126,12 +126,22 @@ struct editorSyntax {
    int flags; // 何をハイライトさせるか. bit flag.
 };
 
-struct undoAPI {
+typedef struct undoAPI {
    int old_cx;
    int new_cx;
    int cy;
-   // struct abuf buf;
-};
+   int old_cy;
+   int new_cy;
+   struct abuf old_buf;
+   struct abuf new_buf;
+} undoAPI;
+
+typedef struct undoStack {
+   undoAPI **api;
+   int length;
+   int max_length;
+   int cy;
+} undoStack;
 
 /* 行 */
 typedef struct erow {
@@ -164,6 +174,7 @@ struct editorConfig {
    struct termios orig_termios;
    struct undoAPI undo;
    struct abuf copybuf;
+   undoStack *undoStack;
 };
 
 struct editorConfig E;
@@ -201,7 +212,6 @@ struct editorSyntax HLDB[] = {
 // エントリ数
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
-/*** unicode support ***/
 /*** terminal ***/
 
 void die(const char *s) {
@@ -703,7 +713,7 @@ int editorRowRxToCx(erow *row, int rx) {
 int editorRowRxBisectLeft(erow *row, int rx) {
    const int j = (1 << 8) - 1;
    const int k = j & ~(1 << 6);
-   for (int i = rx; i > rx - 3; i--) {
+   for (int i = rx; i >= rx - 3; i--) {
       // つまり、文字の1バイト目か否か
       if (i < 0 || ((j | row->render[i]) == k)) {
          return i;
@@ -803,6 +813,7 @@ void editorDelRow(int at) {
    if (at < 0 || at >= E.numrows)
       return;
    editorFreeRow(&E.row[at]);
+   // 前の行に移動させてゆく
    memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
    for (int j = at; j < E.numrows; j++)
       E.row[j].idx--;
@@ -894,14 +905,22 @@ void editorInsertNewline() {
       first_cx = E.row[E.cy + 1].indentations;
 
       // Automatic Comment-out
-      // 汚い. Syntax を用いた形式に直したい.
-      if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
-         if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '/') {
-            editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
-                                '/');
+      char *scs = E.syntax->singleline_comment_start;
+
+      int scs_len = scs ? strlen(scs) : 0;
+      // 単一行コメントのsyntax 対応
+      if (scs_len && strncmp(&E.row[E.cy].chars[E.row[E.cy].indentations], scs,
+                             scs_len) == 0) {
+         int j = 0;
+         do {
             editorRowInsertChar(&E.row[E.cy + 1],
-                                E.row[E.cy + 1].indentations + 1, '/');
-         }
+                                E.row[E.cy + 1].indentations + j, *scs);
+            j++;
+         } while (scs[j] != '\0');
+         // コメント開始の直後、こうやって1文字空をつくる
+         editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + j,
+                             ' ');
+         first_cx += j + 1;
       }
       if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
          if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '*') {
@@ -991,7 +1010,7 @@ void editorOpen(char *filename) {
    FILE *fp = fopen(filename, "r");
    if (!fp) {
       if (errno != ENOENT) {
-	 die("fopen");
+         die("fopen");
       }
       // ファイルが存在しない場合
       // 新規ファイルとして取り扱う
@@ -1047,7 +1066,7 @@ void editorSave() {
    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 
    // undo を無効にする
-   editorUndoInit(E.undo);
+   editorUndoInit();
 }
 
 /*** find ***/
@@ -1134,6 +1153,41 @@ void editorFind() {
 
 /*** undo ***/
 
+void undoStackPush(undoAPI *undo) {
+   if (E.undoStack->max_length <= E.undoStack->length) {
+      // 領域そのものを増やす
+      int newlen = E.undoStack->length + 1;
+      E.undoStack = realloc(E.undoStack, sizeof(undoStack) * newlen);
+      E.undoStack->max_length = newlen;
+   }
+   E.undoStack->api[E.undoStack->length++] = undo;
+   E.undoStack->cy = undo->cy;
+}
+
+undoAPI *undoStackGetLast() {
+   if (E.undoStack->length == 0) {
+      return NULL;
+   } else {
+      return E.undoStack->api[E.undoStack->length - 1];
+   }
+}
+
+undoAPI *undoStackPop() {
+   if (E.undoStack->length == 0) {
+      return NULL;
+   } else {
+      // 取ってきて長さごと減らす
+      undoAPI *api = E.undoStack->api[E.undoStack->length--];
+      undoAPI *latest = undoStackGetLast();
+      if (latest == NULL) {
+         E.undoStack->cy = -1;
+      } else {
+         E.undoStack->cy = latest->cy;
+      }
+      return api;
+   }
+}
+
 void editorUndo() {
    if (E.undo.cy >= 0) { // undo できる
       for (int i = E.undo.new_cx - 1; i >= E.undo.old_cx; i--) {
@@ -1151,6 +1205,14 @@ void editorUndoInit() {
    E.undo.cy = -1;
    E.undo.old_cx = 0;
    E.undo.new_cx = 0;
+
+   undoStack *stack;
+   stack = malloc(sizeof(undoStack));
+   stack->length = 0;
+   stack->max_length = 1;
+   stack->api = NULL;
+   stack->cy = -1;
+   E.undoStack = stack;
 }
 
 /*** copy and paste ***/
