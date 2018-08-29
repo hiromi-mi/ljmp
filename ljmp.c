@@ -173,7 +173,9 @@ struct editorConfig E;
 char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
 char *C_HL_keywords[] = {"switch", "if", "while", "for", "break", "continue",
                          "return", "else", "struct", "union", "typedef",
-                         "static", "enum", "class", "case",
+                         "static", "enum", "class", "case", "#include",
+                         "#ifdef", "#if", "#ifndef", "#else", "#elif", "#endif",
+                         "#pragma", "#define",
 
                          // 型 (KEYWORD2)
                          "int|", "long|", "double|", "float|", "char|",
@@ -881,30 +883,30 @@ void editorInsertNewline() {
       // Automatic Comment-out
       // 汚い. Syntax を用いた形式に直したい.
       if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
-	 if (E.row[E.cy].chars[E.row[E.cy].indentations+1] == '/') {
-	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
-                             '/');
-	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 1,
-			      '/');
-	 } else {
-	    // 複数行コメント
-	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
-                             ' ');
-	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 1,
-			      '*');
-	 }
+         if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '/') {
+            editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
+                                '/');
+            editorRowInsertChar(&E.row[E.cy + 1],
+                                E.row[E.cy + 1].indentations + 1, '/');
+         } else {
+            // 複数行コメント
+            editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
+                                ' ');
+            editorRowInsertChar(&E.row[E.cy + 1],
+                                E.row[E.cy + 1].indentations + 1, '*');
+         }
          editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 2,
                              ' ');
          first_cx += 3;
       }
       if (E.row[E.cy].chars[E.row[E.cy].indentations] == ' ') {
-	 if (E.row[E.cy].chars[E.row[E.cy].indentations+1] == '*') {
-	    // 複数行コメントの継続
-	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
-                             ' ');
-	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 1,
-			      '*');
-	 }
+         if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '*') {
+            // 複数行コメントの継続
+            editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
+                                ' ');
+            editorRowInsertChar(&E.row[E.cy + 1],
+                                E.row[E.cy + 1].indentations + 1, '*');
+         }
          editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 2,
                              ' ');
          first_cx += 3;
