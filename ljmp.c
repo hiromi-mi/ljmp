@@ -163,7 +163,7 @@ struct editorConfig {
    struct editorSyntax *syntax;
    struct termios orig_termios;
    struct undoAPI undo;
-   struct abuf *copybuf;
+   struct abuf copybuf;
 };
 
 struct editorConfig E;
@@ -761,6 +761,7 @@ void editorInsertRow(int at, char *s, size_t len) {
    for (int j = at + 1; j <= E.numrows; j++)
       E.row[j].idx++;
 
+   // 新規行の初期化
    E.row[at].idx = at;
    E.row[at].indentations = 0;
    E.row[at].bsize = len;
@@ -1134,17 +1135,19 @@ void editorUndoInit() {
 /*** copy and paste ***/
 
 void editorCopy() {
-   struct abuf copybuf = ABUF_INIT;
-   abAppend(&copybuf, E.row[E.cy].chars, E.row[E.cy].bsize);
-   E.copybuf = &copybuf;
+   if (E.copybuf.len == 0) {
+      abFree(&E.copybuf);
+      E.copybuf.b = NULL;
+      E.copybuf.len = 0;
+   }
+   abAppend(&E.copybuf, E.row[E.cy].chars, E.row[E.cy].bsize);
    editorSetStatusMessage("Copy completed.");
 }
 
 void editorPaste() {
-   if (E.copybuf != NULL) {
-      editorInsertRow(E.cy, E.copybuf->b, E.copybuf->len);
-      abFree(E.copybuf);
-      E.copybuf = NULL;
+   if (E.copybuf.len > 0) {
+      editorInsertRow(E.cy, E.copybuf.b, E.copybuf.len);
+      E.cy++;
    }
 }
 
@@ -1543,7 +1546,8 @@ void initEditor() {
    E.statusmsg[0] = '\0';
    E.statusmsg_time = 0;
    E.syntax = NULL;
-   E.copybuf = NULL;
+   E.copybuf.b = NULL;
+   E.copybuf.len = 0;
    editorUndoInit();
 
    if (getWindowSize(&E.screenrows, &E.screencols) == -1)
