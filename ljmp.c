@@ -95,6 +95,19 @@ enum editorHighlight {
 #define HL_HIGHLIGHT_NUMBERS (1<<0)
 #define HL_HIGHLIGHT_STRINGS (1<<1)
 
+/*** prototypes ***/
+
+void editorSetStatusMessage(const char *fmt, ...);
+void editorRefreshScreen();
+char *editorPrompt(char *prompt, void (*callback) (char *, int));
+void editorUndoInit();
+// ほんとうに「バッファ」 write() 溜め
+struct abuf {
+   char *b;
+   int len;
+};
+
+
 /*** data ***/
 
 struct editorSyntax {
@@ -105,6 +118,13 @@ struct editorSyntax {
    char *multiline_comment_start;
    char *multiline_comment_end;
    int flags; // 何をハイライトさせるか. bit flag.
+};
+
+struct undoAPI {
+   int old_cx;
+   int new_cx;
+   int cy;
+   //struct abuf buf;
 };
 
 /* 行 */
@@ -136,6 +156,7 @@ struct editorConfig {
    time_t statusmsg_time;
    struct editorSyntax *syntax;
    struct termios orig_termios;
+   struct undoAPI undo;
 };
 
 struct editorConfig E;
@@ -164,12 +185,6 @@ struct editorSyntax HLDB[] = {
 
 // エントリ数
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
-
-/*** prototypes ***/
-
-void editorSetStatusMessage(const char *fmt, ...);
-void editorRefreshScreen();
-char *editorPrompt(char *prompt, void (*callback) (char *, int));
 
 /*** unicode support ***/
 /*** terminal ***/
@@ -777,6 +792,7 @@ void editorRowDelChar(erow *row, int at) {
 
 /*** editor operations ***/
 
+// undo されます、行移動します. 好きにやるには、 editorRowInsertChar() を利用
 void editorInsertChar(int c) {
    if (E.cy == E.numrows) {
       // 行を追記
@@ -784,6 +800,14 @@ void editorInsertChar(int c) {
    }
    editorRowInsertChar(&E.row[E.cy], E.bx, c);
    E.cx++;
+   // undo 対象に追加
+   if (E.undo.cy != E.cy) {
+      E.undo.cy = E.cy;
+      E.undo.old_cx = E.cx-1;
+      E.undo.new_cx = E.cx;
+   } else {
+      E.undo.new_cx += 1;
+   }
 }
 
 void editorInsertNewline() {
@@ -929,6 +953,9 @@ void editorSave() {
    }
    free(buf);
    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+
+   // undo を無効にする
+   editorUndoInit(E.undo);
 }
 
 /*** find ***/
@@ -1011,13 +1038,28 @@ void editorFind() {
    }
 }
 
-/*** append buffer ***/
+/*** undo ***/
 
-// ほんとうに「バッファ」 write() 溜め
-struct abuf {
-   char *b;
-   int len;
-};
+void editorUndo() {
+   if (E.undo.cy >= 0) { // undo できる
+      for (int i=E.undo.new_cx-1;i>=E.undo.old_cx;i--) {
+	 editorRowDelChar(&E.row[E.undo.cy], i);
+      }
+      if (E.cy == E.undo.cy) {
+	 // 同じ行にいるなら、元の位置に戻す
+	 E.cx = E.undo.old_cx;
+      }
+      editorUndoInit();
+   }
+}
+
+void editorUndoInit() {
+   E.undo.cy = -1;
+   E.undo.old_cx = 0;
+   E.undo.new_cx = 0;
+}
+
+/*** append buffer ***/
 
 #define ABUF_INIT {NULL, 0}
 
@@ -1343,6 +1385,9 @@ void editorProcessKeypress() {
 	 editorDelChar();
 	 break;
 
+      case CTRL_KEY('u'):
+	 editorUndo();
+	 break;
       case PAGE_UP:
       case PAGE_DOWN:
 	 {
@@ -1391,6 +1436,7 @@ void initEditor() {
    E.statusmsg[0] = '\0';
    E.statusmsg_time = 0;
    E.syntax = NULL;
+   editorUndoInit();
 
    if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
    E.screenrows -= 2; // For Status-Bar and Message
@@ -1403,7 +1449,7 @@ int main(int argc, char *argv[]) {
       editorOpen(argv[1]);
    }
 
-   editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
+   editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-U = undo");
 
    while (1) {
       editorRefreshScreen();
