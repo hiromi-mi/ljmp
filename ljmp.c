@@ -1135,7 +1135,7 @@ void editorUndoInit() {
 /*** copy and paste ***/
 
 void editorCopy() {
-   if (E.copybuf.len == 0) {
+   if (E.copybuf.len != 0) {
       abFree(&E.copybuf);
       E.copybuf.b = NULL;
       E.copybuf.len = 0;
@@ -1563,7 +1563,7 @@ int main(int argc, char *argv[]) {
    }
 
    editorSetStatusMessage(
-       "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-U = undo");
+       "HELP: (Ctrl+) S:save, Q:quit, F:find, U:undo, C:copy, V:paste");
 
    while (1) {
       editorRefreshScreen();
