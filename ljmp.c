@@ -98,18 +98,21 @@ enum editorHighlight {
 
 /*** prototypes ***/
 
+// ほんとうに「バッファ」 write() 溜め
+struct abuf {
+   char *b;
+   int len;
+};
+
+#define ABUF_INIT                                                              \
+   { NULL, 0 }
+
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 void editorUndoInit();
 void abAppend(struct abuf *ab, const char *s, int len);
 void abFree(struct abuf *ab);
-
-// ほんとうに「バッファ」 write() 溜め
-struct abuf {
-   char *b;
-   int len;
-};
 
 /*** data ***/
 
@@ -1111,21 +1114,19 @@ void editorUndoInit() {
 void editorCopy() {
    struct abuf copybuf = ABUF_INIT;
    abAppend(&copybuf, E.row[E.cy].chars, E.row[E.cy].bsize);
-   E.copybuf = copybuf;
+   E.copybuf = &copybuf;
    editorSetStatusMessage("Copy completed.");
 }
 
 void editorPaste() {
    if (E.copybuf != NULL) {
+      editorInsertRow(E.cy, E.copybuf->b, E.copybuf->len);
       abFree(E.copybuf);
       E.copybuf = NULL;
    }
 }
 
 /*** append buffer ***/
-
-#define ABUF_INIT                                                              \
-   { NULL, 0 }
 
 void abAppend(struct abuf *ab, const char *s, int len) {
    char *new = realloc(ab->b, ab->len + len);
