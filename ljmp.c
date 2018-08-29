@@ -770,7 +770,16 @@ void editorInsertNewline() {
       editorInsertRow(E.cy + 1, &row->chars[E.bx], row->bsize - E.bx);
       // editorInsertRow によって realloc が呼ばれポインタの位置が移動した
       row = &E.row[E.cy];
-      for (int i=0; i < E.row[E.cy].indentations; i++) {
+
+      // Automatic Indentation
+      // E.bx-1 としても、 E.cx > 0 より大丈夫
+      if (E.row[E.cy].chars[E.bx-1] == '{') {
+	 E.row[E.cy+1].indentations = E.row[E.cy].indentations + 1;
+      } else {
+	 E.row[E.cy+1].indentations = E.row[E.cy].indentations;
+      }
+
+      for (int i=0; i < E.row[E.cy+1].indentations; i++) {
 	 editorRowInsertChar(&E.row[E.cy+1], 0, '\t');
       }
       row->bsize = E.bx;
@@ -993,7 +1002,6 @@ void editorScroll() {
    E.rx = 0;
    if (E.cy < E.numrows) {
       editorRowCxToBxRx(&E.row[E.cy], E.cx, &(E.bx), &(E.rx));
-      //E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
    }
 
    /* ウインドウの上 */
@@ -1038,6 +1046,7 @@ void editorDrawRows(struct abuf *ab) {
 	 // ずらす
 	 int len = E.row[filerow].rsize - E.coloff;
 	 if (len > E.screencols) len = E.screencols;
+
 	 // ポインタにしてやることでそのcoloff 以降全体を指すようになる
 	 // 略記法
 	 char *c = &E.row[filerow].render[E.coloff];
