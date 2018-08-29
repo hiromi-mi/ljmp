@@ -181,8 +181,20 @@ char *C_HL_keywords[] = {"switch", "if", "while", "for", "break", "continue",
                          "int|", "long|", "double|", "float|", "char|",
                          "unsigned|", "signed|", "void|", NULL};
 
+char *PYTHON_HL_extensions[] = {".py", NULL};
+char *PYTHON_HL_keywords[] = {
+    "class",    "finally", "is",     "return", "None",   "continue",
+    "for",      "lambda",  "try",    "True",   "def",    "from",
+    "nonlocal", "while",   "and",    "del",    "global", "not",
+    "with",     "as",      "elif",   "if",     "or",     "yield",
+    "assert",   "else",    "import", "pass",   "break",  "except",
+    "in",       "raise",   "False|", "None|",  "True|",  NULL};
+
 struct editorSyntax HLDB[] = {
     {"c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/",
+     HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
+    // Python に複数行コメントはない. "" とすることで、無視できる.
+    {"python", PYTHON_HL_extensions, PYTHON_HL_keywords, "#", "", "",
      HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
 };
 
@@ -889,7 +901,10 @@ void editorInsertNewline() {
                                 '/');
             editorRowInsertChar(&E.row[E.cy + 1],
                                 E.row[E.cy + 1].indentations + 1, '/');
-         } else {
+         }
+      }
+      if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
+         if (E.row[E.cy].chars[E.row[E.cy].indentations + 1] == '*') {
             // 複数行コメント
             editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
                                 ' ');
