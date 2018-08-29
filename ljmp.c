@@ -989,8 +989,14 @@ void editorOpen(char *filename) {
 
    editorSelectSyntaxHighlight();
    FILE *fp = fopen(filename, "r");
-   if (!fp)
-      die("fopen");
+   if (!fp) {
+      if (errno != ENOENT) {
+	 die("fopen");
+      }
+      // ファイルが存在しない場合
+      // 新規ファイルとして取り扱う
+      return;
+   }
 
    char *line = NULL; // こうすると getline() 側で勝手にやってくれる
    size_t linecap = 0;
