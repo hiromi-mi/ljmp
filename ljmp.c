@@ -1340,7 +1340,7 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
          // 文字列を減らす
          if (buflen != 0)
             buf[--buflen] = '\0';
-      } else if (c == '\x1b') {
+      } else if (c == '\x1b' || c == CTRL_KEY('c')) {
          // To cancel
          editorSetStatusMessage("");
          if (callback)
