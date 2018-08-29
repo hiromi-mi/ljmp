@@ -879,12 +879,32 @@ void editorInsertNewline() {
       first_cx = E.row[E.cy + 1].indentations;
 
       // Automatic Comment-out
+      // 汚い. Syntax を用いた形式に直したい.
       if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
-         // 複数行コメントに対応していない
-         editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
+	 if (E.row[E.cy].chars[E.row[E.cy].indentations+1] == '/') {
+	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
                              '/');
-         editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 1,
-                             '/');
+	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 1,
+			      '/');
+	 } else {
+	    // 複数行コメント
+	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
+                             ' ');
+	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 1,
+			      '*');
+	 }
+         editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 2,
+                             ' ');
+         first_cx += 3;
+      }
+      if (E.row[E.cy].chars[E.row[E.cy].indentations] == ' ') {
+	 if (E.row[E.cy].chars[E.row[E.cy].indentations+1] == '*') {
+	    // 複数行コメントの継続
+	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations,
+                             ' ');
+	    editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 1,
+			      '*');
+	 }
          editorRowInsertChar(&E.row[E.cy + 1], E.row[E.cy + 1].indentations + 2,
                              ' ');
          first_cx += 3;
