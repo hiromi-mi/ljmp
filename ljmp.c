@@ -128,16 +128,6 @@ typedef struct undoStack {
 } undoStack;
 
 void die(const char *s);
-void editorSetStatusMessage(const char *fmt, ...);
-void editorRefreshScreen();
-char *editorPrompt(char *prompt, void (*callback)(char *, int));
-void undoInit();
-undoAPI *undoStackGetLast();
-undoAPI *undoStackPop();
-void undoStackPush(undoAPI *undo);
-void abAppend(struct abuf *ab, const char *s, int len);
-void abFree(struct abuf *ab);
-void abAssign(struct abuf *ab, const char *s, int len);
 
 /*** allocate ***/
 
@@ -145,6 +135,14 @@ void *safe_realloc(void *ptr, size_t cnt) {
    void *result = realloc(ptr, cnt);
    if (result == NULL) {
       die("realloc");
+   }
+   return result;
+}
+
+void *safe_malloc(size_t size) {
+   void *result = malloc(size);
+   if (result == NULL) {
+      die("malloc");
    }
    return result;
 }
@@ -230,6 +228,17 @@ struct editorSyntax HLDB[] = {
 // エントリ数
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
+void editorSetStatusMessage(const char *fmt, ...);
+void editorRefreshScreen();
+void editorRowAssignString(erow *row, char *s, size_t len);
+char *editorPrompt(char *prompt, void (*callback)(char *, int));
+void undoInit();
+undoAPI *undoStackGetLast();
+undoAPI *undoStackPop();
+void undoStackPush(undoAPI *undo);
+void abAppend(struct abuf *ab, const char *s, int len);
+void abFree(struct abuf *ab);
+void abAssign(struct abuf *ab, const char *s, int len);
 /*** terminal ***/
 
 void die(const char *s) {
@@ -768,7 +777,7 @@ void editorUpdateRow(erow *row) {
    }
    free(row->render);
    // 8 - 1 = 7 (1 分はすでにrow->bsize として確保してある)
-   row->render = malloc(row->bsize + tabs * (LJMP_TAB_STOP - 1) + 1);
+   row->render = safe_malloc(row->bsize + tabs * (LJMP_TAB_STOP - 1) + 1);
 
    int idx = 0;
    // 実体から表示に割り当てる
@@ -790,6 +799,12 @@ void editorUpdateRow(erow *row) {
    editorUpdateSyntax(row);
 }
 
+void editorAssignRow(int y_at, char *s, size_t len) {
+   if (y_at < 0 || y_at > E.numrows)
+      return;
+   editorRowAssignString(&E.row[y_at], s, len);
+}
+
 // 行の追記
 void editorInsertRow(int at, char *s, size_t len) {
    if (at < 0 || at > E.numrows)
@@ -805,7 +820,7 @@ void editorInsertRow(int at, char *s, size_t len) {
    E.row[at].idx = at;
    E.row[at].indentations = 0;
    E.row[at].bsize = len;
-   E.row[at].chars = malloc(len + 1);
+   E.row[at].chars = safe_malloc(len + 1);
    memcpy(E.row[at].chars, s, len);
    E.row[at].chars[len] = '\0';
 
@@ -844,6 +859,16 @@ void editorRowAppendString(erow *row, char *s, size_t len) {
    // row->bsize 以降に文字列をつけ加える
    memcpy(&row->chars[row->bsize], s, len);
    row->bsize += len;
+   row->chars[row->bsize] = '\0';
+   editorUpdateRow(row);
+   E.dirty++;
+}
+
+void editorRowAssignString(erow *row, char *s, size_t len) {
+   row->chars = safe_realloc(row->chars, len + 1);
+   // row->bsize 以降に文字列をつけ加える
+   memcpy(&row->chars, s, len);
+   row->bsize = len;
    row->chars[row->bsize] = '\0';
    editorUpdateRow(row);
    E.dirty++;
@@ -895,17 +920,17 @@ void editorInsertChar(int c) {
       E.undo.new_cx = E.cx;
       E.undoStack->cy = E.cy;
       */
-      undoAPI *api = malloc(sizeof(undoAPI));
+      undoAPI *api = safe_malloc(sizeof(undoAPI));
       api->cy = E.cy;
       api->old_cx = E.cx - 1;
       api->new_cx = E.cx;
       api->new_cy = 10;
       api->old_cy = 9;
-      api->old_buf = malloc(sizeof(abuf));
+      api->old_buf = safe_malloc(sizeof(abuf));
       abAppend(api->old_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize - 1); // 1バイト加わったから
       // abDeleteLastByte(api->old_buf);
-      api->new_buf = malloc(sizeof(abuf));
+      api->new_buf = safe_malloc(sizeof(abuf));
       abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
       undoStackPush(api);
    } else {
@@ -1032,7 +1057,7 @@ char *editorRowToString(int *buflen) {
    // 長さを知らせる
    *buflen = totlen;
 
-   char *buf = malloc(totlen);
+   char *buf = safe_malloc(totlen);
    char *p = buf; // 全バッファを繋げる
    for (j = 0; j < E.numrows; j++) {
       memcpy(p, E.row[j].chars, E.row[j].bsize);
@@ -1167,7 +1192,7 @@ void editorFindCallBack(char *query, int key) {
 
          // match - row->render がそのマッチ位置, そのうちquery文字塗る
          saved_hl_line = current;
-         saved_hl = malloc(row->rsize); // その行を保存
+         saved_hl = safe_malloc(row->rsize); // その行を保存
          memcpy(saved_hl, row->hl, row->rsize);
          memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
          break;
@@ -1251,8 +1276,7 @@ void editorUndo() {
       editorRowDelChar(&E.row[api->cy], i);
    }
    */
-   editorDelRow(api->cy);
-   editorInsertRow(api->cy, api->old_buf->b, api->old_buf->len);
+   editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
    // if (E.cy == api->cy) {
    // 元の位置に戻す
    E.cx = api->old_cx;
@@ -1268,10 +1292,7 @@ void undoInit() {
    E.undo.new_cx = 0;
 
    undoStack *stack;
-   stack = malloc(sizeof(undoStack));
-   if (stack == NULL) {
-      die("malloc");
-   }
+   stack = safe_malloc(sizeof(undoStack));
    stack->length = 0;
    stack->max_length = 0;
    stack->api = NULL;
@@ -1510,7 +1531,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
 char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
    // user がbuf をfree() することが期待されている
    size_t bufsize = 128;
-   char *buf = malloc(bufsize);
+   char *buf = safe_malloc(bufsize);
 
    size_t buflen = 0;
    // buf に保存される
