@@ -1497,7 +1497,7 @@ void editorProcessKeypress() {
    case '\x1b': // Esc
       break;
    default:
-      if (isprint(c))
+      if (isprint(c) || 0x80 <= (c & 0xff))
          editorInsertChar(c);
       break;
    }
