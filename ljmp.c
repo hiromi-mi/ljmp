@@ -634,6 +634,31 @@ int editorRowRxToCx(erow *row, int rx) {
    return cx;
 }
 
+// rx が多バイト文字の途中といった中途半端な場所であるとき, 左側に寄せる
+int editorRowRxBisectLeft(erow *row, int rx) {
+   const int j = (1 << 8)-1;
+   const int k = j & ~(1 << 6);
+   for (int i=rx;i>rx-3;i--) {
+      // つまり、文字の1バイト目か否か
+      if (i < 0 || (( j | row->render[i]) == k)) {
+	 return i;
+      }
+   }
+   return rx;
+}
+// rx が多バイト文字の途中といった中途半端な場所であるとき, 右側に寄せる
+int editorRowRxBisectRight(erow *row, int rx) {
+   const int j = (1 << 8)-1;
+   const int k = j & ~(1 << 6);
+   for (int i=rx;i<rx+3;i++) {
+      // つまり、文字の1バイト目か否か
+      if (i>=row->rsize || ((j | row->render[i]) == k)) {
+	 return i;
+      }
+   }
+   return rx;
+}
+
 // render の内容を埋める
 void editorUpdateRow(erow *row) {
    int tabs = 0;
@@ -762,6 +787,8 @@ void editorInsertChar(int c) {
 }
 
 void editorInsertNewline() {
+   // 改行した後の初期位置. インデントとかコメントを調整すると増える
+   int first_cx = 0;
    if (E.cx == 0) {
       editorInsertRow(E.cy, "", 0);
    } else {
@@ -782,6 +809,16 @@ void editorInsertNewline() {
       for (int i=0; i < E.row[E.cy+1].indentations; i++) {
 	 editorRowInsertChar(&E.row[E.cy+1], 0, '\t');
       }
+      first_cx = E.row[E.cy+1].indentations;
+
+      // Automatic Comment-out
+      if (E.row[E.cy].chars[E.row[E.cy].indentations] == '/') {
+	 // 複数行コメントに対応していない
+	 editorRowInsertChar(&E.row[E.cy+1], E.row[E.cy+1].indentations, '/');
+	 editorRowInsertChar(&E.row[E.cy+1], E.row[E.cy+1].indentations+1, '/');
+	 editorRowInsertChar(&E.row[E.cy+1], E.row[E.cy+1].indentations+2, ' ');
+	 first_cx += 3;
+      }
       row->bsize = E.bx;
       row->chars[row->bsize] = '\0';
       // 更新
@@ -789,7 +826,7 @@ void editorInsertNewline() {
    }
    // 次の行に移る
    E.cy++;
-   E.cx = E.row[E.cy].indentations;
+   E.cx = first_cx;
 }
 
 void editorDelChar() {
@@ -1046,6 +1083,7 @@ void editorDrawRows(struct abuf *ab) {
 	 // ずらす
 	 int len = E.row[filerow].rsize - E.coloff;
 	 if (len > E.screencols) len = E.screencols;
+	 len = editorRowRxBisectRight(&E.row[filerow], len);
 
 	 // ポインタにしてやることでそのcoloff 以降全体を指すようになる
 	 // 略記法
