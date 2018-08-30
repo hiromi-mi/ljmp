@@ -876,8 +876,7 @@ void editorRowAppendString(erow *row, char *s, size_t len) {
 
 void editorRowAssignString(erow *row, char *s, size_t len) {
    row->chars = safe_realloc(row->chars, len + 1);
-   // row->bsize 以降に文字列をつけ加える
-   memcpy(&row->chars, s, len);
+   memcpy(row->chars, s, len);
    row->bsize = len;
    row->chars[row->bsize] = '\0';
    editorUpdateRow(row);
@@ -941,6 +940,7 @@ void editorInsertChar(int c) {
       api->old_buf->len = 0;
       abAppend(api->old_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize - 1); // 1バイト加わったから
+      api->old_buf->b[E.row[E.cy].bsize-2] = '\0'; // FIXME
       // abDeleteLastByte(api->old_buf);
       api->new_buf = safe_malloc(sizeof(abuf));
       api->new_buf->b = NULL;
@@ -1336,14 +1336,14 @@ void editorPaste() {
 /*** append buffer ***/
 
 void abAppend(struct abuf *ab, const char *s, int len) {
-   char *new = safe_realloc(ab->b, ab->len + len);
+   char *new = safe_realloc(ab->b, ab->len + len+1);
    memcpy(&new[ab->len], s, len);
    ab->b = new;
    ab->len += len;
 }
 
 void abAssign(struct abuf *ab, const char *s, int len) {
-   char *new = safe_realloc(ab->b, len);
+   char *new = safe_realloc(ab->b, len+1);
    memcpy(new, s, len);
    ab->b = new;
    ab->len = len;
@@ -1757,13 +1757,13 @@ void initEditor() {
    E.copybuf.b = NULL;
    E.copybuf.len = 0;
 
-   undoStack *stack;
-   stack = safe_malloc(sizeof(undoStack));
-   stack->length = 0;
-   stack->max_length = 0;
-   stack->api = NULL;
-   stack->cy = -1;
-   E.undoStack = stack;
+   undoStack *undo;
+   undo = safe_malloc(sizeof(undoStack));
+   undo->length = 0;
+   undo->max_length = 0;
+   undo->api = NULL;
+   undo->cy = -1;
+   E.undoStack = undo;
 
    undoStack *redo;
    redo = safe_malloc(sizeof(undoStack));
@@ -1771,7 +1771,7 @@ void initEditor() {
    redo->max_length = 0;
    redo->api = NULL;
    redo->cy = -1;
-   E.redoStack = stack;
+   E.redoStack = redo;
 
    if (getWindowSize(&E.screenrows, &E.screencols) == -1)
       die("getWindowSize");
