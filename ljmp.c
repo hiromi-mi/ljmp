@@ -132,9 +132,13 @@ void die(const char *s);
 /*** allocate ***/
 
 void *safe_realloc(void *ptr, size_t cnt) {
+   if (cnt == 0) {
+      return ptr;
+   }
    void *result = realloc(ptr, cnt);
    if (result == NULL) {
-      die("realloc");
+      puts("realloc");
+      exit(-1);
    }
    return result;
 }
@@ -142,7 +146,8 @@ void *safe_realloc(void *ptr, size_t cnt) {
 void *safe_malloc(size_t size) {
    void *result = malloc(size);
    if (result == NULL) {
-      die("malloc");
+      puts("malloc");
+      exit(-1);
    }
    return result;
 }
@@ -391,7 +396,8 @@ int is_separator(int c) {
 }
 
 void editorUpdateSyntax(erow *row) {
-   row->hl = safe_realloc(row->hl, row->rsize);
+   // 長さ0 の行を realloc() できないので、こうやって動くようにする
+   row->hl = safe_realloc(row->hl, row->rsize+1);
    // 何もなければHL_NORMAL 扱い
    memset(row->hl, HL_NORMAL, row->rsize);
 
@@ -927,10 +933,14 @@ void editorInsertChar(int c) {
       api->new_cy = 10;
       api->old_cy = 9;
       api->old_buf = safe_malloc(sizeof(abuf));
+      api->old_buf->b = NULL;
+      api->old_buf->len = 0;
       abAppend(api->old_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize - 1); // 1バイト加わったから
       // abDeleteLastByte(api->old_buf);
       api->new_buf = safe_malloc(sizeof(abuf));
+      api->new_buf->b = NULL;
+      api->new_buf->len = 0;
       abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
       undoStackPush(api);
    } else {
