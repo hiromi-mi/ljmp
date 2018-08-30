@@ -196,6 +196,7 @@ struct editorConfig {
    struct undoAPI undo;
    struct abuf copybuf;
    undoStack *undoStack;
+   undoStack *redoStack;
 };
 
 struct editorConfig E;
@@ -237,9 +238,9 @@ void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 void editorRowAssignString(erow *row, char *s, size_t len);
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
-void undoInit();
 undoAPI *undoStackGetLast();
-undoAPI *undoStackPop();
+#define undoStackPop() stackPop(E.undoStack)
+#define redoStackPop() stackPop(E.redoStack)
 void undoStackPush(undoAPI *undo);
 void abAppend(struct abuf *ab, const char *s, int len);
 void abFree(struct abuf *ab);
@@ -1042,8 +1043,11 @@ void editorDelChar() {
    erow *row = &E.row[E.cy];
    if (E.cx > 0) {
       editorRowDelChar(row, E.cx - 1);
-      abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
+      // FIXME
+      if (undoStackGetLast()) {
+	 abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize);
+      }
       E.cx--;
    } else {
       E.cx = E.row[E.cy - 1].csize;
@@ -1143,7 +1147,6 @@ void editorSave() {
    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 
    // undo を無効にする
-   undoInit();
 }
 
 /*** find ***/
@@ -1251,21 +1254,24 @@ undoAPI *undoStackGetLast() {
    }
 }
 
-undoAPI *undoStackPop() {
+undoAPI *stackPop(undoStack* stack) {
    // 利用者側で free() することが想定されている
-   if (E.undoStack->length == 0) {
+   if (stack->length == 0) {
       return NULL;
    } else {
       // 取ってきて長さごと減らす
-      E.undoStack->length--;
-      undoAPI *api = E.undoStack->api[E.undoStack->length];
-      if (E.undoStack->length == 0) {
-         E.undoStack->cy = -1;
+      stack->length--;
+      undoAPI *api = stack->api[stack->length];
+      if (stack->length == 0) {
+         stack->cy = -1;
       } else {
-         E.undoStack->cy = E.undoStack->api[E.undoStack->length - 1]->cy;
+         stack->cy = stack->api[stack->length - 1]->cy;
       }
       return api;
    }
+}
+
+void undoStackInit() {
 }
 
 void undoAPIFree(undoAPI *api) {
@@ -1275,39 +1281,27 @@ void undoAPIFree(undoAPI *api) {
 }
 
 void editorUndo() {
-   // if (E.undo.cy >= 0) { // undo できる
    undoAPI *api = undoStackPop();
    if (api == NULL) {
       editorSetStatusMessage("No more undo");
       return;
    }
-   /*
-   for (int i = api->new_cx - 1; i >= api->old_cx; i--) {
-      editorRowDelChar(&E.row[api->cy], i);
-   }
-   */
    editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
-   // if (E.cy == api->cy) {
-   // 元の位置に戻す
    E.cx = api->old_cx;
    E.cy = api->cy;
-   //}
    undoAPIFree(api);
-   //}
 }
 
-void undoInit() {
-   E.undo.cy = -1;
-   E.undo.old_cx = 0;
-   E.undo.new_cx = 0;
-
-   undoStack *stack;
-   stack = safe_malloc(sizeof(undoStack));
-   stack->length = 0;
-   stack->max_length = 0;
-   stack->api = NULL;
-   stack->cy = -1;
-   E.undoStack = stack;
+void editorRedo() {
+   undoAPI *api = redoStackPop();
+   if (api == NULL) {
+      editorSetStatusMessage("No need to redo");
+      return;
+   }
+   editorAssignRow(api->cy, api->new_buf->b, api->new_buf->len);
+   E.cx = api->new_cx;
+   E.cy = api->cy;
+   undoAPIFree(api);
 }
 
 /*** copy and paste ***/
@@ -1685,7 +1679,11 @@ void editorProcessKeypress() {
       editorPaste();
       break;
 
-   case CTRL_KEY('u'):
+   case CTRL_KEY('y'):
+      editorRedo();
+      break;
+
+   case CTRL_KEY('z'):
       editorUndo();
       break;
 
@@ -1739,7 +1737,22 @@ void initEditor() {
    E.syntax = NULL;
    E.copybuf.b = NULL;
    E.copybuf.len = 0;
-   undoInit();
+
+   undoStack *stack;
+   stack = safe_malloc(sizeof(undoStack));
+   stack->length = 0;
+   stack->max_length = 0;
+   stack->api = NULL;
+   stack->cy = -1;
+   E.undoStack = stack;
+
+   undoStack *redo;
+   redo = safe_malloc(sizeof(undoStack));
+   redo->length = 0;
+   redo->max_length = 0;
+   redo->api = NULL;
+   redo->cy = -1;
+   E.redoStack = stack;
 
    if (getWindowSize(&E.screenrows, &E.screencols) == -1)
       die("getWindowSize");
@@ -1754,7 +1767,7 @@ int main(int argc, char *argv[]) {
    }
 
    editorSetStatusMessage(
-       "HELP: (Ctrl+) S:save, Q:quit, F:find, U:undo, C:copy, V:paste");
+       "HELP: (Ctrl+) S:save, Q:quit, F:find, Z:undo, Y:redo, C:copy, V:paste");
 
    while (1) {
       editorRefreshScreen();
