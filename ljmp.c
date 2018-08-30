@@ -239,9 +239,12 @@ void editorRefreshScreen();
 void editorRowAssignString(erow *row, char *s, size_t len);
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 undoAPI *undoStackGetLast();
+undoAPI *stackPop(undoStack* stack);
+void stackPush(undoStack *stack, undoAPI *undo);
 #define undoStackPop() stackPop(E.undoStack)
 #define redoStackPop() stackPop(E.redoStack)
-void undoStackPush(undoAPI *undo);
+#define undoStackPush(undo) stackPush(E.undoStack, undo)
+#define redoStackPush(undo) stackPush(E.redoStack, undo)
 void abAppend(struct abuf *ab, const char *s, int len);
 void abFree(struct abuf *ab);
 void abAssign(struct abuf *ab, const char *s, int len);
@@ -1233,17 +1236,17 @@ void editorFind() {
 
 /*** undo ***/
 
-void undoStackPush(undoAPI *undo) {
-   if (E.undoStack->max_length <= E.undoStack->length) {
+void stackPush(undoStack *stack, undoAPI *undo) {
+   if (stack->max_length <= stack->length) {
       // 領域そのものを増やす
-      int newlen = E.undoStack->length * 2 + 1;
-      E.undoStack->api =
-          safe_realloc(E.undoStack->api, sizeof(undoAPI *) * newlen);
-      E.undoStack->max_length = newlen;
+      int newlen = stack->length * 2 + 1;
+      stack->api =
+          safe_realloc(stack->api, sizeof(undoAPI *) * newlen);
+      stack->max_length = newlen;
    }
-   E.undoStack->api[E.undoStack->length] = undo;
-   E.undoStack->length++;
-   E.undoStack->cy = undo->cy;
+   stack->api[stack->length] = undo;
+   stack->length++;
+   stack->cy = undo->cy;
 }
 
 undoAPI *undoStackGetLast() {
@@ -1271,13 +1274,20 @@ undoAPI *stackPop(undoStack* stack) {
    }
 }
 
-void undoStackInit() {
-}
-
 void undoAPIFree(undoAPI *api) {
    abFree(api->old_buf);
    abFree(api->new_buf);
    free(api);
+}
+
+void stackClear(undoStack *stack) {
+   if (stack->length == 0) {
+      return;
+   }
+   undoAPI *api;
+   while ((api = stackPop(stack)) != NULL) {
+      undoAPIFree(api);
+   }
 }
 
 void editorUndo() {
@@ -1289,7 +1299,7 @@ void editorUndo() {
    editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
    E.cx = api->old_cx;
    E.cy = api->cy;
-   undoAPIFree(api);
+   redoStackPush(api);
 }
 
 void editorRedo() {
@@ -1301,7 +1311,7 @@ void editorRedo() {
    editorAssignRow(api->cy, api->new_buf->b, api->new_buf->len);
    E.cx = api->new_cx;
    E.cy = api->cy;
-   undoAPIFree(api);
+   undoStackPush(api);
 }
 
 /*** copy and paste ***/
@@ -1642,6 +1652,15 @@ void editorProcessKeypress() {
          quit_times--;
          return;
       }
+      // メモリ解放
+      stackClear(E.undoStack);
+      stackClear(E.redoStack);
+
+      for (int i=0;i<E.numrows;i++) {
+	 free(E.row[i].chars);
+	 free(E.row[i].render);
+      }
+      free(E.row);
       termsend("\x1b[2J", 4);
       termsend("\x1b[H", 3);
       exit(0);
