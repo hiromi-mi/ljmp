@@ -244,7 +244,7 @@ void editorRefreshScreen();
 void editorRowAssignString(erow *row, char *s, size_t len);
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 undoAPI *undoStackGetLast();
-undoAPI *stackPop(undoStack* stack);
+undoAPI *stackPop(undoStack *stack);
 void stackPush(undoStack *stack, undoAPI *undo);
 void stackClear(undoStack *stack);
 #define undoStackPop() stackPop(E.undoStack)
@@ -407,7 +407,7 @@ int is_separator(int c) {
 
 void editorUpdateSyntax(erow *row) {
    // 長さ0 の行を realloc() できないので、こうやって動くようにする
-   row->hl = safe_realloc(row->hl, row->rsize+1);
+   row->hl = safe_realloc(row->hl, row->rsize + 1);
    // 何もなければHL_NORMAL 扱い
    memset(row->hl, HL_NORMAL, row->rsize);
 
@@ -927,10 +927,6 @@ void editorInsertChar(int c) {
    }
    editorRowInsertChar(&E.row[E.cy], E.bx, c);
    E.cx++;
-   // 変更が加わったので、redo できなくする
-   if (E.redoStack->length > 0) {
-      stackClear(E.redoStack);
-   }
 
    // undo 対象に追加
    if (E.undoStack->cy != E.cy) {
@@ -946,7 +942,7 @@ void editorInsertChar(int c) {
       api->old_buf->len = 0;
       abAppend(api->old_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize - 1); // 1バイト加わったから
-      api->old_buf->b[E.row[E.cy].bsize-2] = '\0'; // FIXME
+      api->old_buf->b[E.row[E.cy].bsize - 2] = '\0'; // FIXME
       api->new_buf = safe_malloc(sizeof(abuf));
       api->new_buf->b = NULL;
       api->new_buf->len = 0;
@@ -971,7 +967,7 @@ void editorInsertNewline() {
       api->undo_type = UNDOTYPE_NEWLINE;
       api->cy = E.cy;
       api->old_cy = E.cy;
-      api->new_cy = E.cy+1;
+      api->new_cy = E.cy + 1;
       api->old_cx = E.cx - 1;
       api->new_cx = E.cx;
       api->new_cy = 10;
@@ -981,7 +977,7 @@ void editorInsertNewline() {
       api->old_buf->len = 0;
       abAppend(api->old_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize - 1); // 1バイト加わったから
-      api->old_buf->b[E.row[E.cy].bsize-2] = '\0'; // FIXME
+      api->old_buf->b[E.row[E.cy].bsize - 2] = '\0'; // FIXME
       api->new_buf = safe_malloc(sizeof(abuf));
       api->new_buf->b = NULL;
       api->new_buf->len = 0;
@@ -1063,7 +1059,7 @@ void editorInsertNewline() {
 }
 
 void editorDelChar() {
-   // 消すものがないじょうきょう ではそのまま
+   // 消すものが存在しない状況ならそのまま
    if (E.cy == E.numrows)
       return;
    // 最初の最初ならそのまま
@@ -1074,25 +1070,26 @@ void editorDelChar() {
    if (E.cx > 0) {
       editorRowDelChar(row, E.cx - 1);
       if (E.cy == E.undoStack->cy || undoStackGetLast()) {
-	 abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
-               E.row[E.cy].bsize);
+         // undoStack が存在する場合は、行の状況を更新する
+         abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
+                  E.row[E.cy].bsize);
       } else {
-	 undoAPI *api = safe_malloc(sizeof(undoAPI));
-	 api->undo_type = UNDOTYPE_ROWEDIT;
-	 api->cy = E.cy;
-	 api->old_cx = E.cx;
-	 api->new_cx = E.cx - 1;
-	 api->new_cy = 10;
-	 api->old_cy = 9;
-	 api->old_buf = safe_malloc(sizeof(abuf));
-	 api->old_buf->b = NULL;
-	 api->old_buf->len = 0;
-	 // FIXME: oldbuf をどうしようか?
-	 api->new_buf = safe_malloc(sizeof(abuf));
-	 api->new_buf->b = NULL;
-	 api->new_buf->len = 0;
-	 abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
-	 undoStackPush(api);
+         undoAPI *api = safe_malloc(sizeof(undoAPI));
+         api->undo_type = UNDOTYPE_ROWEDIT;
+         api->cy = E.cy;
+         api->old_cx = E.cx;
+         api->new_cx = E.cx - 1;
+         api->new_cy = 10;
+         api->old_cy = 9;
+         api->old_buf = safe_malloc(sizeof(abuf));
+         api->old_buf->b = NULL;
+         api->old_buf->len = 0;
+         // FIXME: oldbuf をどうしようか?
+         api->new_buf = safe_malloc(sizeof(abuf));
+         api->new_buf->b = NULL;
+         api->new_buf->len = 0;
+         abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
+         undoStackPush(api);
       }
       E.cx--;
    } else {
@@ -1283,8 +1280,7 @@ void stackPush(undoStack *stack, undoAPI *undo) {
    if (stack->max_length <= stack->length) {
       // 領域そのものを増やす
       int newlen = stack->length * 2 + 1;
-      stack->api =
-          safe_realloc(stack->api, sizeof(undoAPI *) * newlen);
+      stack->api = safe_realloc(stack->api, sizeof(undoAPI *) * newlen);
       stack->max_length = newlen;
    }
    stack->api[stack->length] = undo;
@@ -1300,7 +1296,7 @@ undoAPI *undoStackGetLast() {
    }
 }
 
-undoAPI *stackPop(undoStack* stack) {
+undoAPI *stackPop(undoStack *stack) {
    // 利用者側で free() することが想定されている
    if (stack->length == 0) {
       return NULL;
@@ -1339,17 +1335,17 @@ void editorUndo() {
       editorSetStatusMessage("No more undo");
       return;
    }
-   switch(api->undo_type) {
-      case UNDOTYPE_ROWEDIT:
-	 editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
-	 break;
-      case UNDOTYPE_NEWLINE:
-	 editorInsertRow(api->old_cy, api->old_buf->b, api->old_buf->len);
-	 break;
-      default:
-	 // ここに到達するはずはない
-	 die("editorUndo");
-	 break;
+   switch (api->undo_type) {
+   case UNDOTYPE_ROWEDIT:
+      editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
+      break;
+   case UNDOTYPE_NEWLINE:
+      editorInsertRow(api->old_cy, api->old_buf->b, api->old_buf->len);
+      break;
+   default:
+      // ここに到達するはずはない
+      die("editorUndo");
+      break;
    }
    E.cx = api->old_cx;
    E.cy = api->cy;
@@ -1362,18 +1358,18 @@ void editorRedo() {
       editorSetStatusMessage("No need to redo");
       return;
    }
-   switch(api->undo_type) {
-      case UNDOTYPE_ROWEDIT:
-	 editorAssignRow(api->cy, api->new_buf->b, api->new_buf->len);
-	 break;
-      case UNDOTYPE_NEWLINE:
-	 //editorInsertRow(api->new_cy, api->new_buf->b, api->new_buf->len);
-	 editorDelRow(api->new_cy); // FIXME: 途中行
-	 break;
-      default:
-	 // ここに到達するはずはない
-	 die("editorRedo");
-	 break;
+   switch (api->undo_type) {
+   case UNDOTYPE_ROWEDIT:
+      editorAssignRow(api->cy, api->new_buf->b, api->new_buf->len);
+      break;
+   case UNDOTYPE_NEWLINE:
+      // editorInsertRow(api->new_cy, api->new_buf->b, api->new_buf->len);
+      editorDelRow(api->new_cy); // FIXME: 途中行
+      break;
+   default:
+      // ここに到達するはずはない
+      die("editorRedo");
+      break;
    }
    E.cx = api->new_cx;
    E.cy = api->cy;
@@ -1402,14 +1398,14 @@ void editorPaste() {
 /*** append buffer ***/
 
 void abAppend(struct abuf *ab, const char *s, int len) {
-   char *new = safe_realloc(ab->b, ab->len + len+1);
+   char *new = safe_realloc(ab->b, ab->len + len + 1);
    memcpy(&new[ab->len], s, len);
    ab->b = new;
    ab->len += len;
 }
 
 void abAssign(struct abuf *ab, const char *s, int len) {
-   char *new = safe_realloc(ab->b, len+1);
+   char *new = safe_realloc(ab->b, len + 1);
    memcpy(new, s, len);
    ab->b = new;
    ab->len = len;
@@ -1722,9 +1718,9 @@ void editorProcessKeypress() {
       stackClear(E.undoStack);
       stackClear(E.redoStack);
 
-      for (int i=0;i<E.numrows;i++) {
-	 free(E.row[i].chars);
-	 free(E.row[i].render);
+      for (int i = 0; i < E.numrows; i++) {
+         free(E.row[i].chars);
+         free(E.row[i].render);
       }
       free(E.row);
       termsend("\x1b[2J", 4);
@@ -1754,6 +1750,10 @@ void editorProcessKeypress() {
    case DEL_KEY:
       if (c == DEL_KEY)
          editorMoveCursor(ARROW_RIGHT); // 右から消す
+      // 変更が加わったので、redo できなくする
+      if (E.redoStack->length > 0) {
+         stackClear(E.redoStack);
+      }
       editorDelChar();
       break;
 
@@ -1761,6 +1761,10 @@ void editorProcessKeypress() {
       editorCopy();
       break;
    case CTRL_KEY('v'):
+      // 変更が加わったので、redo できなくする
+      if (E.redoStack->length > 0) {
+         stackClear(E.redoStack);
+      }
       editorPaste();
       break;
 
@@ -1796,8 +1800,13 @@ void editorProcessKeypress() {
    case '\x1b': // Esc
       break;
    default:
-      if (isprint(c) || 0x80 <= (c & 0xff))
+      if (isprint(c) || 0x80 <= (c & 0xff)) {
+         // 変更が加わったので、redo できなくする
+         if (E.redoStack->length > 0) {
+            stackClear(E.redoStack);
+         }
          editorInsertChar(c);
+      }
       break;
    }
 }
