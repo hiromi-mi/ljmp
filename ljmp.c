@@ -191,10 +191,10 @@ struct editorConfig {
    int coloff;     // col offset: スクロールの左端にある位置
    int screenrows; // 端末(ry
    int screencols;
-   int numrows; // 行数
+   int numrows;      // 行数
    int sb_bx, sb_by; // 選択開始のbx, by
    int se_bx, se_by; // 選択終了のbx, by
-   erow *row;   // 実際の内容
+   erow *row;        // 実際の内容
    int dirty;
    char *filename;
    char statusmsg[80];
@@ -1134,9 +1134,9 @@ char *editorRowToString(int *buflen) {
    return buf;
 }
 
-void editorOpen(char *filename) {
+void editorOpenWithFilename(char *filename) {
    free(E.filename);
-   E.filename = strdup(filename); // 文字列の複製
+   E.filename = strdup(filename); // 文字列の複製. free で解放すべき.
 
    editorSelectSyntaxHighlight();
    FILE *fp = fopen(filename, "r");
@@ -1161,6 +1161,16 @@ void editorOpen(char *filename) {
    free(line); // getline() が失敗したとしても free() が必要
    fclose(fp);
    E.dirty = 0;
+}
+
+void editorOpen() {
+   char *filename = editorPrompt("Open file: %s", NULL);
+   if (filename == NULL) {
+      editorSetStatusMessage("Open aborted");
+      return;
+   }
+   editorOpenWithFilename(filename);
+   free(filename);
 }
 
 void editorSave() {
@@ -1765,9 +1775,7 @@ void editorProcessKeypress() {
       if (c == DEL_KEY)
          editorMoveCursor(ARROW_RIGHT); // 右から消す
       // 変更が加わったので、redo できなくする
-      if (E.redoStack->length > 0) {
-         stackClear(E.redoStack);
-      }
+      stackClear(E.redoStack);
       editorDelChar();
       break;
 
@@ -1781,10 +1789,12 @@ void editorProcessKeypress() {
       break;
    case CTRL_KEY('v'):
       // 変更が加わったので、redo できなくする
-      if (E.redoStack->length > 0) {
-         stackClear(E.redoStack);
-      }
+      stackClear(E.redoStack);
       editorPaste();
+      break;
+
+   case CTRL_KEY('o'):
+      editorOpen();
       break;
 
    case CTRL_KEY('y'):
@@ -1886,11 +1896,11 @@ int main(int argc, char *argv[]) {
    enableRawMode();
    initEditor();
    if (argc >= 2) {
-      editorOpen(argv[1]);
+      editorOpenWithFilename(argv[1]);
    }
 
    editorSetStatusMessage(
-       "HELP: (Ctrl+) S:save, Q:quit, F:find, Z:undo, Y:redo, C:copy, X:cut, V:paste");
+       "(Ctrl+)O:open S:save Q:quit F:find Z:undo Y:redo C:copy X:cut V:paste");
 
    while (1) {
       editorRefreshScreen();
