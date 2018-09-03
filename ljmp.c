@@ -192,6 +192,8 @@ struct editorConfig {
    int screenrows; // 端末(ry
    int screencols;
    int numrows; // 行数
+   int sb_bx, sb_by; // 選択開始のbx, by
+   int se_bx, se_by; // 選択終了のbx, by
    erow *row;   // 実際の内容
    int dirty;
    char *filename;
@@ -857,10 +859,15 @@ void editorFreeRow(erow *row) {
    free(row->hl);
 }
 
-void editorDelRow(int at) {
+int editorDelRow(int at) {
    // at にある行を削除
    if (at < 0 || at >= E.numrows)
-      return;
+      return -1;
+   // 1行しかない場合は、1行目を空行にする
+   if (at == 0) {
+      editorAssignRow(at, "", 0);
+      return 1;
+   }
    editorFreeRow(&E.row[at]);
    // 前の行に移動させてゆく
    memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
@@ -868,6 +875,7 @@ void editorDelRow(int at) {
       E.row[j].idx--;
    E.numrows--;
    E.dirty++;
+   return 0;
 }
 
 void editorRowAppendString(erow *row, char *s, size_t len) {
@@ -1378,14 +1386,20 @@ void editorRedo() {
 
 /*** copy and paste ***/
 
-void editorCopy() {
+void editorCopy(int is_cut) {
    if (E.copybuf.len != 0) {
       abFree(&E.copybuf);
       E.copybuf.b = NULL;
       E.copybuf.len = 0;
    }
    abAppend(&E.copybuf, E.row[E.cy].chars, E.row[E.cy].bsize);
-   editorSetStatusMessage("Copy completed.");
+   if (is_cut == 0) {
+      editorSetStatusMessage("Copy completed.");
+   } else {
+      // 切り取り
+      editorDelRow(E.cy);
+      editorSetStatusMessage("Cut completed.");
+   }
 }
 
 void editorPaste() {
@@ -1758,7 +1772,12 @@ void editorProcessKeypress() {
       break;
 
    case CTRL_KEY('c'):
-      editorCopy();
+      // コピー : 0
+      editorCopy(0);
+      break;
+   case CTRL_KEY('x'):
+      // 切り取り : not 0
+      editorCopy(-1);
       break;
    case CTRL_KEY('v'):
       // 変更が加わったので、redo できなくする
@@ -1822,6 +1841,10 @@ void initEditor() {
    E.cy = 0;
    E.rx = 0;
    E.bx = 0;
+   E.sb_bx = 0;
+   E.sb_by = 0;
+   E.se_bx = 0;
+   E.se_by = 0;
    E.numrows = 0; // 行数
    E.row = NULL;  // 行そのものを持つポインタ
    E.dirty = 0;
@@ -1867,7 +1890,7 @@ int main(int argc, char *argv[]) {
    }
 
    editorSetStatusMessage(
-       "HELP: (Ctrl+) S:save, Q:quit, F:find, Z:undo, Y:redo, C:copy, V:paste");
+       "HELP: (Ctrl+) S:save, Q:quit, F:find, Z:undo, Y:redo, C:copy, X:cut, V:paste");
 
    while (1) {
       editorRefreshScreen();
