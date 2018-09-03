@@ -5,7 +5,7 @@
 # Start ljmp
 tmux send -t ljmp "./ljmp ljmp.c" ENTER
 sleep 0.1
-tmux capture-pane -p | head -n 8 | diff -y test1.ok -
+tmux capture-pane -p | head -n 8 | diff -u test1.ok -
 if [ $? -ne 0 ]
 then
    # 変化があり
