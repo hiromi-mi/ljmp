@@ -63,6 +63,7 @@
 /** defines ***/
 #define LJMP_VERSION "0.0.2"
 #define LJMP_TAB_STOP 8
+#define LJMP_SOFT_TAB 3
 #define LJMP_QUIT_TIMES 2
 
 #define CTRL_KEY(k) ((k)&0x1f)
@@ -133,9 +134,6 @@ typedef struct undoAPI {
    struct abuf *new_buf;
 } undoAPI;
 
-#define UNDOAPI_INIT                                                           \
-   { 0, 0, 0, 0, 0, NULL, NULL }
-
 typedef struct undoStack {
    undoAPI **api;
    int length;
@@ -191,6 +189,7 @@ typedef struct erow {
    unsigned char *hl;
    int hl_open_comment;
    int indentations; // インデント行数
+   int softtabstop;  // インデント幅: softtabstop != 0 なら動く
 } erow;
 
 struct editorConfig {
@@ -240,13 +239,16 @@ char *PYTHON_HL_keywords[] = {
     "assert",   "else",    "import", "pass",   "break",  "except",
     "in",       "raise",   "False|", "None|",  "True|",  NULL};
 
+char *MARKDOWN_HL_extensions[] = {".markdown", ".md", ".mkd", NULL};
+char *MARKDOWN_HL_keywords[] = {NULL};
+
 struct editorSyntax HLDB[] = {
     {"c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/",
      HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
     // Python に複数行コメントはない. "" とすることで、無視できる.
     {"python", PYTHON_HL_extensions, PYTHON_HL_keywords, "#", "", "",
      HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
-};
+    {"markdown", MARKDOWN_HL_extensions, MARKDOWN_HL_keywords, "", "", "", 0}};
 
 // エントリ数
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
@@ -342,47 +344,47 @@ int editorReadKey() {
             }
             if (seq[2] == ';') {
                // Shift+矢印, Ctrl+矢印, Alt+矢印
-               if ( termread(&seq[3], 1) != 1) {
+               if (termread(&seq[3], 1) != 1) {
                   return '\x1b';
                }
-               if ( termread(&seq[4], 1) != 1) {
+               if (termread(&seq[4], 1) != 1) {
                   return '\x1b';
                }
                switch (seq[3]) {
-                  case '5': // CTRL
-                     switch (seq[4]) {
-                        case 'A':
-                           return ARROW_UP_CTRL;
-                        case 'B':
-                           return ARROW_DOWN_CTRL;
-                        case 'C':
-                           return ARROW_RIGHT_CTRL;
-                        case 'D':
-                           return ARROW_LEFT_CTRL;
-                     }
-                     break;
+               case '5': // CTRL
+                  switch (seq[4]) {
+                  case 'A':
+                     return ARROW_UP_CTRL;
+                  case 'B':
+                     return ARROW_DOWN_CTRL;
+                  case 'C':
+                     return ARROW_RIGHT_CTRL;
+                  case 'D':
+                     return ARROW_LEFT_CTRL;
+                  }
+                  break;
 
-                  case '6': // CTRL-SHIFT
-                     switch (seq[4]) {
-                        case 'C':
-                           return ARROW_RIGHT_SHIFT_CTRL;
-                        case 'D':
-                           return ARROW_LEFT_SHIFT_CTRL;
-                     }
-                     break;
+               case '6': // CTRL-SHIFT
+                  switch (seq[4]) {
+                  case 'C':
+                     return ARROW_RIGHT_SHIFT_CTRL;
+                  case 'D':
+                     return ARROW_LEFT_SHIFT_CTRL;
+                  }
+                  break;
 
-                  case '2':
-                     switch (seq[4]) {
-                        case 'A':
-                           return ARROW_UP_SHIFT;
-                        case 'B':
-                           return ARROW_DOWN_SHIFT;
-                        case 'C':
-                           return ARROW_RIGHT_SHIFT;
-                        case 'D':
-                           return ARROW_LEFT_SHIFT;
-                     }
-                     break;
+               case '2':
+                  switch (seq[4]) {
+                  case 'A':
+                     return ARROW_UP_SHIFT;
+                  case 'B':
+                     return ARROW_DOWN_SHIFT;
+                  case 'C':
+                     return ARROW_RIGHT_SHIFT;
+                  case 'D':
+                     return ARROW_LEFT_SHIFT;
+                  }
+                  break;
                }
             }
          } else {
@@ -892,6 +894,7 @@ void editorInsertRow(int at, char *s, size_t len) {
    // 新規行の初期化
    E.row[at].idx = at;
    E.row[at].indentations = 0;
+   E.row[at].softtabstop = 0;
    E.row[at].bsize = len;
    E.row[at].chars = safe_malloc(len + 1);
    memcpy(E.row[at].chars, s, len);
@@ -1137,14 +1140,15 @@ void editorDelChar() {
 
    erow *row = &E.row[E.cy];
    if (E.cx > 0) {
-      editorRowDelChar(row, E.cx - 1);
       if (E.cy == E.undoStack->cy || undoStackGetLast()) {
          // undoStack が存在する場合は、行の状況を更新する
+         editorRowDelChar(row, E.cx - 1);
          abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
                   E.row[E.cy].bsize);
       } else {
+         // undoAPI を追加
          undoAPI *api = safe_malloc(sizeof(undoAPI));
-         api->undo_type = UNDOTYPE_ROWEDIT;
+         api->undo_type = UNDOTYPE_NEWLINE;
          api->cy = E.cy;
          api->old_cx = E.cx;
          api->new_cx = E.cx - 1;
@@ -1153,7 +1157,10 @@ void editorDelChar() {
          api->old_buf = safe_malloc(sizeof(abuf));
          api->old_buf->b = NULL;
          api->old_buf->len = 0;
-         // FIXME: oldbuf をどうしようか?
+         abAppend(api->old_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
+
+         editorRowDelChar(row, E.cx - 1);
+
          api->new_buf = safe_malloc(sizeof(abuf));
          api->new_buf->b = NULL;
          api->new_buf->len = 0;
@@ -1278,7 +1285,7 @@ void editorFindWordNearest(int (*sep_func)(int c), int direction) {
    erow *row = &E.row[current];
    int pos = E.bx;
 
-   if ((pos +direction ) <= 0 || (pos+direction) >= row->bsize) {
+   if ((pos + direction) <= 0 || (pos + direction) >= row->bsize) {
       // 次か前の行に移動
       current = E.cy + direction;
 
@@ -1290,18 +1297,20 @@ void editorFindWordNearest(int (*sep_func)(int c), int direction) {
       }
       if (current > E.numrows) {
          E.cy = E.numrows - 1;
-         E.cx = E.row[E.numrows-1].csize-1;
+         E.cx = E.row[E.numrows - 1].csize - 1;
          return;
       }
-      if (direction == 1) pos = 0;
-      if (direction == -1) pos = E.row[current].csize;
+      if (direction == 1)
+         pos = 0;
+      if (direction == -1)
+         pos = E.row[current].csize;
    } else {
       do {
          // 区切りにいるなら移動させる
          pos += direction;
       } while (pos >= 0 && pos <= row->bsize && sep_func(row->chars[pos]));
    }
-   for (int i=pos;i>=0 && i<row->bsize;i+=direction) {
+   for (int i = pos; i >= 0 && i < row->bsize; i += direction) {
       if (sep_func(row->chars[i])) {
          E.cy = current;
          // 次の単語の最初の位置
