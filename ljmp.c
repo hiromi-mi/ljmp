@@ -1038,8 +1038,14 @@ void editorInsertNewline() {
       api->old_buf = safe_malloc(sizeof(abuf));
       api->old_buf->b = NULL;
       api->old_buf->len = 0;
+      int bytes = E.row[E.cy].bsize;
+      if (bytes <= 0) {
+         bytes = 0;
+      } else {
+         bytes--;
+      }
       abAppend(api->old_buf, E.row[E.cy].chars,
-               E.row[E.cy].bsize - 1); // 1バイト加わったから
+               bytes); // 1バイト加わったから
       api->old_buf->b[E.row[E.cy].bsize - 2] = '\0'; // FIXME
       api->new_buf = safe_malloc(sizeof(abuf));
       api->new_buf->b = NULL;
