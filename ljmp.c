@@ -118,10 +118,7 @@ typedef struct abuf {
 #define ABUF_INIT                                                              \
    { NULL, 0 }
 
-enum undoType {
-   UNDOTYPE_ROWEDIT,
-   UNDOTYPE_NEWLINE,
-};
+enum undoType { UNDOTYPE_ROWEDIT, UNDOTYPE_NEWLINE, UNDOTYPE_DELLINE };
 
 typedef struct undoAPI {
    enum undoType undo_type;
@@ -684,6 +681,7 @@ int editorRowCxToBxRx(erow *row, const int cx, int *save_bx, int *save_rx) {
          bx += 4;
       } else {
          // Incorrect Sequence. Treat as Binary.
+         chr = row->chars[bx];
          bx += 1;
       }
       // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
@@ -1001,8 +999,8 @@ void editorInsertChar(int c) {
       api->cy = E.cy;
       api->old_cx = E.cx - 1;
       api->new_cx = E.cx;
-      api->new_cy = 10;
-      api->old_cy = 9;
+      api->new_cy = 0;
+      api->old_cy = 0;
       api->old_buf = safe_malloc(sizeof(abuf));
       api->old_buf->b = NULL;
       api->old_buf->len = 0;
@@ -1028,34 +1026,6 @@ void editorInsertNewline() {
    int first_cx = 0;
    if (E.cx == 0) {
       editorInsertRow(E.cy, "", 0);
-      undoAPI *api = safe_malloc(sizeof(undoAPI));
-      // undo 対象に追加
-      api->undo_type = UNDOTYPE_NEWLINE;
-      api->cy = E.cy;
-      api->old_cy = E.cy;
-      api->new_cy = E.cy + 1;
-      api->old_cx = E.cx - 1;
-      api->new_cx = E.cx;
-      api->new_cy = 10;
-      api->old_cy = 9;
-      api->old_buf = safe_malloc(sizeof(abuf));
-      api->old_buf->b = NULL;
-      api->old_buf->len = 0;
-      int bytes = E.row[E.cy].bsize;
-      if (bytes <= 0) {
-         bytes = 0;
-      } else {
-         bytes--;
-      }
-      abAppend(api->old_buf, E.row[E.cy].chars,
-               bytes); // 1バイト加わったから
-      api->old_buf->b[E.row[E.cy].bsize - 2] = '\0'; // FIXME
-      api->new_buf = safe_malloc(sizeof(abuf));
-      api->new_buf->b = NULL;
-      api->new_buf->len = 0;
-      abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
-      undoStackPush(api);
-
    } else {
       erow *row = &E.row[E.cy];
       // E.cx 以降の内容を次の行に挿入
@@ -1125,6 +1095,34 @@ void editorInsertNewline() {
       // 更新
       editorUpdateRow(row);
    }
+   {
+      undoAPI *api = safe_malloc(sizeof(undoAPI));
+      // undo 対象に追加
+      api->undo_type = UNDOTYPE_NEWLINE;
+      api->cy = E.cy;
+      api->old_cy = E.cy;
+      api->new_cy = E.cy + 1;
+      api->old_cx = E.cx - 1;
+      api->new_cx = E.cx;
+      api->old_buf = safe_malloc(sizeof(abuf));
+      api->old_buf->b = NULL;
+      api->old_buf->len = 0;
+      int bytes = E.row[E.cy].bsize;
+      if (bytes <= 0) {
+         bytes = 0;
+      } else {
+         bytes--;
+      }
+      abAppend(api->old_buf, E.row[E.cy].chars,
+               bytes); // 1バイト加わったから
+      api->old_buf->b[E.row[E.cy].bsize - 2] = '\0'; // FIXME
+      api->new_buf = safe_malloc(sizeof(abuf));
+      api->new_buf->b = NULL;
+      api->new_buf->len = 0;
+      abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
+      undoStackPush(api);
+   }
+
    // 次の行に移る
    E.cy++;
    E.cx = first_cx;
@@ -1174,6 +1172,26 @@ void editorDelChar() {
       editorRowAppendString(&E.row[E.cy - 1], row->chars, row->bsize);
       // その行を消す
       editorDelRow(E.cy);
+      {
+         // undoAPI を追加
+         undoAPI *api = safe_malloc(sizeof(undoAPI));
+         api->undo_type = UNDOTYPE_DELLINE;
+         api->cy = -2;
+         api->old_cx = E.cx;
+         api->new_cx = E.cx - 1;
+         api->new_cy = E.cy;
+         api->old_cy = E.cy - 1;
+         api->old_buf = safe_malloc(sizeof(abuf));
+         api->old_buf->b = NULL;
+         api->old_buf->len = 0;
+         // abAppend(api->old_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
+
+         api->new_buf = safe_malloc(sizeof(abuf));
+         api->new_buf->b = NULL;
+         api->new_buf->len = 0;
+         // abAppend(api->new_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
+         undoStackPush(api);
+      }
       E.cy--;
    }
 }
@@ -1472,8 +1490,23 @@ void editorUndo() {
       editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
       break;
    case UNDOTYPE_NEWLINE:
-      editorInsertRow(api->old_cy, api->old_buf->b, api->old_buf->len);
+      editorDelRow(api->new_cy);
       break;
+   case UNDOTYPE_DELLINE: {
+      erow *row;
+      row = &E.row[api->new_cy];
+
+      int old_bx = editorRowCxToBxRx(row, api->old_cx, NULL, NULL);
+      // E.cx 以降の内容を次の行に挿入
+      editorInsertRow(api->new_cy + 1, &row->chars[old_bx],
+                      row->bsize - old_bx);
+      // editorInsertRow によって safe_realloc が呼ばれポインタの位置が移動した
+      row = &E.row[api->new_cy];
+      row->bsize = old_bx;
+      row->chars[row->bsize] = '\0';
+      // 更新
+      editorUpdateRow(row);
+   } break;
    default:
       // ここに到達するはずはない
       die("editorUndo");
@@ -1494,9 +1527,20 @@ void editorRedo() {
    case UNDOTYPE_ROWEDIT:
       editorAssignRow(api->cy, api->new_buf->b, api->new_buf->len);
       break;
-   case UNDOTYPE_NEWLINE:
-      // editorInsertRow(api->new_cy, api->new_buf->b, api->new_buf->len);
-      editorDelRow(api->new_cy); // FIXME: 途中行
+   case UNDOTYPE_NEWLINE: {
+      erow *row = &E.row[api->old_cy];
+      int old_bx = editorRowCxToBxRx(row, api->old_cx, NULL, NULL);
+      // E.cx 以降の内容を次の行に挿入
+      editorInsertRow(api->old_cy + 1, &row->chars[old_bx],
+                      row->bsize - old_bx);
+      // editorInsertRow によって safe_realloc が呼ばれポインタの位置が移動した
+      row = &E.row[api->old_cy];
+      row->bsize = old_bx;
+      row->chars[row->bsize] = '\0';
+      // 更新
+      editorUpdateRow(row);
+   } break;
+   case UNDOTYPE_DELLINE:
       break;
    default:
       // ここに到達するはずはない
