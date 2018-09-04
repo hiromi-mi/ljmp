@@ -79,7 +79,17 @@ enum editorKey {
    HOME_KEY,
    END_KEY,
    PAGE_UP,
-   PAGE_DOWN
+   PAGE_DOWN,
+   ARROW_LEFT_CTRL,
+   ARROW_RIGHT_CTRL,
+   ARROW_LEFT_SHIFT_CTRL,
+   ARROW_RIGHT_SHIFT_CTRL,
+   ARROW_UP_CTRL,
+   ARROW_DOWN_CTRL,
+   ARROW_LEFT_SHIFT,
+   ARROW_RIGHT_SHIFT,
+   ARROW_UP_SHIFT,
+   ARROW_DOWN_SHIFT
 };
 
 enum editorHighlight {
@@ -301,7 +311,7 @@ int editorReadKey() {
    }
 
    if (c == '\x1b') {
-      char seq[3];
+      char seq[5];
 
       if (termread(&seq[0], 1) != 1)
          return '\x1b';
@@ -328,6 +338,51 @@ int editorReadKey() {
                   return HOME_KEY;
                case '8':
                   return END_KEY;
+               }
+            }
+            if (seq[2] == ';') {
+               // Shift+矢印, Ctrl+矢印, Alt+矢印
+               if ( termread(&seq[3], 1) != 1) {
+                  return '\x1b';
+               }
+               if ( termread(&seq[4], 1) != 1) {
+                  return '\x1b';
+               }
+               switch (seq[3]) {
+                  case '5': // CTRL
+                     switch (seq[4]) {
+                        case 'A':
+                           return ARROW_UP_CTRL;
+                        case 'B':
+                           return ARROW_DOWN_CTRL;
+                        case 'C':
+                           return ARROW_RIGHT_CTRL;
+                        case 'D':
+                           return ARROW_LEFT_CTRL;
+                     }
+                     break;
+
+                  case '6': // CTRL-SHIFT
+                     switch (seq[4]) {
+                        case 'C':
+                           return ARROW_RIGHT_SHIFT_CTRL;
+                        case 'D':
+                           return ARROW_LEFT_SHIFT_CTRL;
+                     }
+                     break;
+
+                  case '2':
+                     switch (seq[4]) {
+                        case 'A':
+                           return ARROW_UP_SHIFT;
+                        case 'B':
+                           return ARROW_DOWN_SHIFT;
+                        case 'C':
+                           return ARROW_RIGHT_SHIFT;
+                        case 'D':
+                           return ARROW_LEFT_SHIFT;
+                     }
+                     break;
                }
             }
          } else {
@@ -1212,6 +1267,50 @@ void editorSave() {
 
 /*** find ***/
 
+void editorFindWordNearest(int (*sep_func)(int c), int direction) {
+   int current = E.cy;
+   erow *row = &E.row[current];
+   int pos = E.bx;
+
+   if ((pos +direction ) <= 0 || (pos+direction) >= row->bsize) {
+      // 次か前の行に移動
+      current = E.cy + direction;
+
+      // これ以上検索しようがない
+      if (current < 0) {
+         E.cy = 0;
+         E.cx = 0;
+         return;
+      }
+      if (current > E.numrows) {
+         E.cy = E.numrows - 1;
+         E.cx = E.row[E.numrows-1].csize-1;
+         return;
+      }
+      if (direction == 1) pos = 0;
+      if (direction == -1) pos = E.row[current].csize;
+   } else {
+      do {
+         // 区切りにいるなら移動させる
+         pos += direction;
+      } while (pos >= 0 && pos <= row->bsize && sep_func(row->chars[pos]));
+   }
+   for (int i=pos;i>=0 && i<row->bsize;i+=direction) {
+      if (sep_func(row->chars[i])) {
+         E.cy = current;
+         // 次の単語の最初の位置
+         E.cx = editorRowBxToCx(row, i) + 1;
+         return;
+      }
+   }
+   if (direction == 1) {
+      E.cx = row->csize; // 行末を返す
+   } else {
+      E.cx = 0;
+   }
+   return;
+}
+
 void editorFindCallBack(char *query, int key) {
    static int last_match = -1; // last match における row
    static int direction = 1;   // 1 : forward, -1 : backward
@@ -1683,7 +1782,6 @@ void editorMoveCursor(int key) {
    case ARROW_LEFT:
       if (E.cx != 0) {
          E.cx--;
-         editorSetStatusMessage("%d %d", E.cx, row->csize);
       } else if (E.cy > 0) {
          // 前の行の最後に移る
          E.cy--;
@@ -1694,11 +1792,9 @@ void editorMoveCursor(int key) {
       // 横スクロール幅の制限
       if (row && E.cx < row->csize) {
          E.cx++;
-         editorSetStatusMessage("%d %d", E.cx, row->csize);
       } else if (row && E.cx == row->csize) {
          E.cy++;
          E.cx = 0;
-         editorSetStatusMessage("%d %d", E.cx, row->csize);
       }
       break;
    case ARROW_UP:
@@ -1759,6 +1855,7 @@ void editorProcessKeypress() {
    case HOME_KEY:
       E.cx = 0;
       break;
+
    case END_KEY:
       if (E.cy < E.numrows) {
          E.cx = E.row[E.cy].rsize;
@@ -1825,6 +1922,28 @@ void editorProcessKeypress() {
    case ARROW_RIGHT:
       editorMoveCursor(c);
       break;
+
+   case ARROW_LEFT_SHIFT:
+   case ARROW_RIGHT_SHIFT:
+      // 選択部分を作る
+      break;
+
+   case ARROW_LEFT_SHIFT_CTRL:
+      editorFindWordNearest(is_separator, -1);
+      break;
+
+   case ARROW_RIGHT_SHIFT_CTRL:
+      editorFindWordNearest(is_separator, 1);
+      break;
+
+   case ARROW_LEFT_CTRL:
+      editorFindWordNearest(isspace, -1);
+      break;
+
+   case ARROW_RIGHT_CTRL:
+      editorFindWordNearest(isspace, 1);
+      break;
+
    case CTRL_KEY('l'):
    case '\x1b': // Esc
       break;
