@@ -7,6 +7,7 @@ tmux -u new-session -d -x 90 -y 10 -t ljmp
 
 bash ./test1.sh
 bash ./test_cut.sh
+bash ./test_syntax.sh
 
 # Start ljmp
 #tmux send -t ljmp "./ljmp ljmp.c" ENTER
