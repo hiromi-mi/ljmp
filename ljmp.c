@@ -960,9 +960,20 @@ void editorRowInsertChar(erow *row, int at, char c) {
       at = row->bsize;
    row->chars = safe_realloc(row->chars, row->bsize + 2); // 端っこ及び隣
    // memcpy とは違い被ってても大丈夫らしい
+   /*
+   if (isprint(E.row[E.cy].chars[row->bsize+1]) != 0) {
+      puts("error2");
+   }
+   */
    memmove(&row->chars[at + 1], &row->chars[at], row->bsize - at);
+   /*
+   if(strlen(E.row[E.cy].chars) != E.row[E.cy].csize) {
+      puts("error");
+   }
+   */
    row->bsize++;
    row->chars[at] = c;
+   row->chars[row->bsize] = '\0';
    editorUpdateRow(row);
    E.dirty++;
 }
