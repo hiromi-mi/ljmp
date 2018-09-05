@@ -8,6 +8,8 @@ tmux -u new-session -d -x 90 -y 10 -t ljmp
 source ./test1.sh
 source ./test_cut.sh
 source ./test_syntax.sh
+source ./test_undo.sh
+source ./test_find.sh
 
 # Start ljmp
 #tmux send -t ljmp "./ljmp ljmp.c" ENTER
