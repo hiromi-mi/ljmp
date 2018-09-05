@@ -742,6 +742,7 @@ int editorRowBxToCx(erow *row, int bx) {
          cur_bx += 4;
       } else {
          // Incorrect Sequence. Treat as Binary.
+         chr = row->chars[cur_bx];
          cur_bx += 1;
       }
       // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
@@ -1006,7 +1007,6 @@ void editorInsertChar(int c) {
       api->old_buf->len = 0;
       abAppend(api->old_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize - 1); // 1バイト加わったから
-      api->old_buf->b[E.row[E.cy].bsize - 2] = '\0'; // FIXME
       api->new_buf = safe_malloc(sizeof(abuf));
       api->new_buf->b = NULL;
       api->new_buf->len = 0;
@@ -1015,7 +1015,8 @@ void editorInsertChar(int c) {
    } else {
       abAssign(undoStackGetLast()->new_buf, E.row[E.cy].chars,
                E.row[E.cy].bsize);
-      // FIXME
+      undoStackGetLast()->new_cx += 1;
+      // FIXME たぶんこっちのほうが早い
       // undoStackGetLast()->new_cx += 1;
       // E.undoStack->api[E.undoStack->length - 1]->new_cx += 1;
    }
@@ -1115,7 +1116,6 @@ void editorInsertNewline() {
       }
       abAppend(api->old_buf, E.row[E.cy].chars,
                bytes); // 1バイト加わったから
-      api->old_buf->b[E.row[E.cy].bsize - 2] = '\0'; // FIXME
       api->new_buf = safe_malloc(sizeof(abuf));
       api->new_buf->b = NULL;
       api->new_buf->len = 0;
@@ -1146,7 +1146,7 @@ void editorDelChar() {
       } else {
          // undoAPI を追加
          undoAPI *api = safe_malloc(sizeof(undoAPI));
-         api->undo_type = UNDOTYPE_NEWLINE;
+         api->undo_type = UNDOTYPE_ROWEDIT;
          api->cy = E.cy;
          api->old_cx = E.cx;
          api->new_cx = E.cx - 1;
@@ -1184,6 +1184,7 @@ void editorDelChar() {
          api->old_buf = safe_malloc(sizeof(abuf));
          api->old_buf->b = NULL;
          api->old_buf->len = 0;
+         // 使わない
          // abAppend(api->old_buf, E.row[E.cy].chars, E.row[E.cy].bsize);
 
          api->new_buf = safe_malloc(sizeof(abuf));
@@ -1490,7 +1491,19 @@ void editorUndo() {
       editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
       break;
    case UNDOTYPE_NEWLINE:
-      editorDelRow(api->new_cy);
+      {
+         if (api->new_cy <= 0) {
+            // 次の行に移動
+            api->new_cy++;
+         }
+         erow *row = &E.row[api->new_cy];
+         // 前の行に残りを残して
+         editorRowAppendString(&E.row[api->new_cy - 1], row->chars, row->bsize);
+         // その行を消す
+         editorDelRow(api->new_cy);
+         editorUpdateRow(&E.row[api->new_cy - 1]);
+         E.cy = api->old_cy;
+      }
       break;
    case UNDOTYPE_DELLINE: {
       erow *row;
@@ -1541,6 +1554,19 @@ void editorRedo() {
       editorUpdateRow(row);
    } break;
    case UNDOTYPE_DELLINE:
+      {
+         if (api->old_cy <= 0) {
+            // 次の行に移動
+            api->old_cy++;
+         }
+         erow *row = &E.row[api->old_cy];
+         // 前の行に残りを残して
+         editorRowAppendString(&E.row[api->old_cy - 1], row->chars, row->bsize);
+         // その行を消す
+         editorDelRow(api->old_cy);
+         editorUpdateRow(&E.row[api->old_cy - 1]);
+         E.cy = api->new_cy;
+      }
       break;
    default:
       // ここに到達するはずはない
@@ -1883,6 +1909,7 @@ void editorProcessKeypress() {
 
    switch (c) {
    case '\r':
+      stackClear(E.redoStack);
       editorInsertNewline();
       break;
    case CTRL_KEY('q'):
