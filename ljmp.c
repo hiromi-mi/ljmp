@@ -157,10 +157,18 @@ void *safe_realloc(void *ptr, size_t cnt) {
 void *safe_malloc(size_t size) {
    void *result = malloc(size);
    if (result == NULL) {
-      puts("malloc");
+      puts("try to malloc null pointer.");
       exit(-1);
    }
    return result;
+}
+
+void *safe_free(void *ptr) {
+   if (ptr == NULL) {
+      puts("try to double-free.");
+   }
+   free(ptr);
+   ptr = NULL;
 }
 
 /*** data ***/
@@ -179,7 +187,8 @@ struct editorSyntax {
 typedef struct erow {
    int idx;      // ファイル内でのindex
    int bsize;    // バイナリ的な長さ
-   int rsize;    // 実際に描画するテキストの長さ
+   int rbsize;   // 実際に描画するテキストの長さ
+   int rrsize;   // 実際に描画するテキストの文字幅合計
    int csize;    // 文字数
    char *chars;  // 格納されたテキスト
    char *render; // 実際に描画するテキスト
@@ -463,9 +472,9 @@ int is_separator(int c) {
 
 void editorUpdateSyntax(erow *row) {
    // 長さ0 の行を realloc() できないので、こうやって動くようにする
-   row->hl = safe_realloc(row->hl, row->rsize + 1);
+   row->hl = safe_realloc(row->hl, row->rbsize + 1);
    // 何もなければHL_NORMAL 扱い
-   memset(row->hl, HL_NORMAL, row->rsize);
+   memset(row->hl, HL_NORMAL, row->rbsize);
 
    if (E.syntax == NULL)
       return;
@@ -485,14 +494,14 @@ void editorUpdateSyntax(erow *row) {
    int in_comment = (row->idx > 0 && E.row[row->idx - 1].hl_open_comment);
 
    int i = 0;
-   while (i < row->rsize) {
+   while (i < row->rbsize) {
       char c = row->render[i];
       unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
 
       if (scs_len && !in_string && !in_comment) {
          // 最初のn byte しか比較しない. // かどうか.
          if (!strncmp(&row->render[i], scs, scs_len)) {
-            memset(&row->hl[i], HL_COMMENT, row->rsize - i);
+            memset(&row->hl[i], HL_COMMENT, row->rbsize - i);
             break;
          }
       }
@@ -523,7 +532,7 @@ void editorUpdateSyntax(erow *row) {
       if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
          if (in_string) {
             row->hl[i] = HL_STRING;
-            if (c == '\\' && i + 1 < row->rsize) {
+            if (c == '\\' && i + 1 < row->rbsize) {
                row->hl[i + 1] = HL_STRING;
                // \ の直後の文字は気にしない
                i += 2;
@@ -677,7 +686,7 @@ int editorRowCxToBxRx(erow *row, const int cx, int *save_bx, int *save_rx) {
          // 11110xxx
          chr = ((row->chars[bx] & 0x07) << 18) +
                ((row->chars[bx + 1] & 0x3F) << 12) +
-               ((row->chars[bx + 2] & 0x3F) << 6) + (row->chars[bx + 3]);
+               ((row->chars[bx + 2] & 0x3F) << 6) + (row->chars[bx + 3] & 0x3F);
          bx += 4;
       } else {
          // Incorrect Sequence. Treat as Binary.
@@ -704,7 +713,70 @@ int editorRowCxToBxRx(erow *row, const int cx, int *save_bx, int *save_rx) {
    return bx;
 }
 
-int editorRowBxToCx(erow *row, int bx) {
+int editorRowBxCxRxToBxCxRx(erow *row, int bcr, int *optional_bx,
+                            int *optional_cx, int *optional_rx) {
+   int cur_cx = 0;
+   int bx = 0;
+   int cur_bx = 0;
+   int width;
+   wchar_t chr;
+   int rx = 0;
+   for (cur_cx = 0;; cur_cx++) {
+      if (row->chars[cur_bx] == '\t') {
+         // タブ文字
+         rx += (LJMP_TAB_STOP) - (rx % LJMP_TAB_STOP);
+         cur_bx += 1;
+         continue;
+      }
+
+      // コードポイントのバイト数 see utf-8 (7)
+      if ((row->chars[cur_bx] & 0x80) == 0) { // 0xxxxxxx
+         chr = row->chars[cur_bx];
+         cur_bx += 1;
+      } else if ((row->chars[cur_bx] & 0xE0) == 0xC0) {
+         // 110xxxxx
+         chr = ((row->chars[cur_bx] & 0x1F) << 6) +
+               (row->chars[cur_bx + 1] & 0x3F);
+         cur_bx += 2;
+      } else if ((row->chars[cur_bx] & 0xF0) == 0xE0) {
+         // 1110xxxx
+         chr = ((row->chars[cur_bx] & 0x0F) << 12) +
+               ((row->chars[cur_bx + 1] & 0x3F) << 6) +
+               (row->chars[cur_bx + 2] & 0x3F);
+         cur_bx += 3;
+      } else if ((row->chars[cur_bx] & 0xF8) == 0xF0) {
+         // 11110xxx
+         chr = ((row->chars[cur_bx] & 0x07) << 18) +
+               ((row->chars[cur_bx + 1] & 0x3F) << 12) +
+               ((row->chars[cur_bx + 2] & 0x3F) << 6) +
+               (row->chars[cur_bx + 3] & 0x3F);
+         cur_bx += 4;
+      } else {
+         // Incorrect Sequence. Treat as Binary.
+         chr = row->chars[cur_bx];
+         cur_bx += 1;
+      }
+      // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
+      // これが本来必要かもしれない
+      width = wcwidth(chr);
+      if (width >= 0) {
+         rx += width;
+      }
+      // width < 0 when unprintable chars
+      if (cur_bx > bx) {
+         break;
+      }
+   }
+   if (optional_rx != NULL) {
+      *optional_rx = rx;
+   }
+   if (optional_cx != NULL) {
+      *optional_cx = cur_cx;
+   }
+   return cur_cx;
+}
+
+int editorRowBxToCxRx(erow *row, int bx, int *optional_cx, int *optional_rx) {
    int cur_cx = 0;
    int cur_bx = 0;
    int width;
@@ -738,7 +810,7 @@ int editorRowBxToCx(erow *row, int bx) {
          chr = ((row->chars[cur_bx] & 0x07) << 18) +
                ((row->chars[cur_bx + 1] & 0x3F) << 12) +
                ((row->chars[cur_bx + 2] & 0x3F) << 6) +
-               (row->chars[cur_bx + 3]);
+               (row->chars[cur_bx + 3] & 0x3F);
          cur_bx += 4;
       } else {
          // Incorrect Sequence. Treat as Binary.
@@ -756,11 +828,17 @@ int editorRowBxToCx(erow *row, int bx) {
          break;
       }
    }
+   if (optional_rx != NULL) {
+      *optional_rx = rx;
+   }
+   if (optional_cx != NULL) {
+      *optional_cx = cur_cx;
+   }
    return cur_cx;
 }
 
 // editorRowCxToRx の逆演算
-int editorRowRxToCx(erow *row, int rx) {
+int editorRowRxToBx(erow *row, int rx) {
    int cur_rx = 0;
    int cx;
    int width;
@@ -772,7 +850,7 @@ int editorRowRxToCx(erow *row, int rx) {
          // ここの -1 は rx++ があるから
          cur_rx += (LJMP_TAB_STOP - 1) - (cur_rx % LJMP_TAB_STOP);
       }
-      cur_rx++;
+      // cur_rx++;
 
       // UTF-8 への対応
       // コードポイントのバイト数 see utf-8 (7)
@@ -791,7 +869,7 @@ int editorRowRxToCx(erow *row, int rx) {
          // 11110xxx
          chr = ((row->chars[cx] & 0x07) << 18) +
                ((row->chars[cx + 1] & 0x3F) << 12) +
-               ((row->chars[cx + 2] & 0x3F) << 6) + (row->chars[cx + 3]);
+               ((row->chars[cx + 2] & 0x3F) << 6) + (row->chars[cx + 3] & 0x3F);
          cx += 3;
       } else {
          // 不正なシーケンス
@@ -807,32 +885,33 @@ int editorRowRxToCx(erow *row, int rx) {
          return cx;
    }
    // ここの行にはたどりつかないはず
+   // assert(0);
    return cx;
 }
 
 // rx が多バイト文字の途中といった中途半端な場所であるとき, 左側に寄せる
 int editorRowRxBisectLeft(erow *row, int rx) {
-   const int j = (1 << 8) - 1;
-   const int k = j & ~(1 << 6);
    for (int i = rx; i >= rx - 3; i--) {
       // つまり、文字の1バイト目か否か
-      if (i < 0 || ((j | row->render[i]) == k)) {
+      if (i >= row->bsize || !(row->render[i] >> 7 & 1) ||
+          (row->render[i] >> 6 & 1)) {
          return i;
       }
    }
    return rx;
 }
 // rx が多バイト文字の途中といった中途半端な場所であるとき, 右側に寄せる
-int editorRowRxBisectRight(erow *row, int rx) {
-   const int j = (1 << 8) - 1;
-   const int k = j & ~(1 << 6);
-   for (int i = rx; i < rx + 3; i++) {
+int editorRowRxBisectRight(erow *row, int rbx) {
+   for (int i = rbx; i < rbx + 3; i++) {
       // つまり、文字の1バイト目か否か
-      if (i >= row->rsize || ((j | row->render[i]) == k)) {
+      if (i >= row->bsize || !(row->render[i] >> 7 & 1) ||
+          (row->render[i] >> 6 & 1)) {
+         // TODO
          return i;
       }
    }
-   return rx;
+   assert(0);
+   return rbx;
 }
 
 // render の内容を埋める
@@ -849,7 +928,7 @@ void editorUpdateRow(erow *row) {
          tabs++;
       }
    }
-   free(row->render);
+   safe_free(row->render);
    // 8 - 1 = 7 (1 分はすでにrow->bsize として確保してある)
    row->render = safe_malloc(row->bsize + tabs * (LJMP_TAB_STOP - 1) + 1);
 
@@ -866,8 +945,8 @@ void editorUpdateRow(erow *row) {
       }
    }
    row->render[idx] = '\0';
-   row->rsize = idx;
-   row->csize = editorRowBxToCx(row, row->bsize);
+   editorRowBxToCxRx(row, row->bsize, &row->csize, &row->rrsize);
+   row->rbsize = idx;
 
    editorRowCxToBxRx(&E.row[E.cy], E.cx, &(E.bx), &(E.rx));
    editorUpdateSyntax(row);
@@ -899,7 +978,8 @@ void editorInsertRow(int at, char *s, size_t len) {
    memcpy(E.row[at].chars, s, len);
    E.row[at].chars[len] = '\0';
 
-   E.row[at].rsize = 0;
+   E.row[at].rbsize = 0;
+   E.row[at].rrsize = 0;
    E.row[at].csize = 0;
    E.row[at].render = NULL;
    E.row[at].hl = NULL;
@@ -911,9 +991,9 @@ void editorInsertRow(int at, char *s, size_t len) {
 
 void editorFreeRow(erow *row) {
    // row を削除
-   free(row->render);
-   free(row->chars);
-   free(row->hl);
+   safe_free(row->render);
+   safe_free(row->chars);
+   safe_free(row->hl);
 }
 
 int editorDelRow(int at) {
@@ -1211,7 +1291,7 @@ void editorDelChar() {
 /*** file i/o ***/
 
 char *editorRowToString(int *buflen) {
-   /* Expecting the caller to free() the memory */
+   /* Expecting the caller to safe_free() the memory */
    int totlen = 0;
    int j;
    for (j = 0; j < E.numrows; j++) {
@@ -1233,7 +1313,7 @@ char *editorRowToString(int *buflen) {
 }
 
 void editorOpenWithFilename(char *filename) {
-   free(E.filename);
+   safe_free(E.filename);
    E.filename = strdup(filename); // 文字列の複製. free で解放すべき.
 
    editorSelectSyntaxHighlight();
@@ -1256,7 +1336,7 @@ void editorOpenWithFilename(char *filename) {
          linelen--;
       editorInsertRow(E.numrows, line, linelen);
    }
-   free(line); // getline() が失敗したとしても free() が必要
+   safe_free(line); // getline() が失敗したとしても safe_free() が必要
    fclose(fp);
    E.dirty = 0;
 }
@@ -1268,7 +1348,7 @@ void editorOpen() {
       return;
    }
    editorOpenWithFilename(filename);
-   free(filename);
+   safe_free(filename);
 }
 
 void editorSave() {
@@ -1292,7 +1372,7 @@ void editorSave() {
       if (ftruncate(fd, len) != -1) {
          if (write(fd, buf, len) == len) {
             close(fd);
-            free(buf);
+            safe_free(buf);
             editorSetStatusMessage("%d bytes written on disk", len);
             E.dirty = 0;
             return;
@@ -1302,7 +1382,7 @@ void editorSave() {
       write(fd, buf, len);
       close(fd);
    }
-   free(buf);
+   safe_free(buf);
    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 
    // undo を無効にする
@@ -1344,7 +1424,7 @@ void editorFindWordNearest(int (*sep_func)(int c), int direction) {
       if (sep_func(row->chars[i])) {
          E.cy = current;
          // 次の単語の最初の位置
-         E.cx = editorRowBxToCx(row, i) + 1;
+         E.cx = editorRowBxToCxRx(row, i, NULL, NULL) + 1;
          return;
       }
    }
@@ -1367,8 +1447,8 @@ void editorFindCallBack(char *query, int key) {
    // 保存してから復元するまでの間にファイルを編集できないから問題なく動ける
    if (saved_hl) {
       // 復元
-      memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rsize);
-      free(saved_hl);
+      memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rbsize);
+      safe_free(saved_hl);
       saved_hl = NULL;
    }
    if (key == '\r' || key == '\x1b') {
@@ -1404,14 +1484,14 @@ void editorFindCallBack(char *query, int key) {
       if (match) {
          last_match = current;
          E.cy = current;
-         E.cx = editorRowRxToCx(row, match - row->render); // ポインタ演算
+         E.cx = editorRowRxToBx(row, match - row->render); // ポインタ演算
          E.rowoff = E.numrows; // あえて一番下の行に配置することにして、
          // editorScroll() を呼び、目的行に行く
 
          // match - row->render がそのマッチ位置, そのうちquery文字塗る
          saved_hl_line = current;
-         saved_hl = safe_malloc(row->rsize); // その行を保存
-         memcpy(saved_hl, row->hl, row->rsize);
+         saved_hl = safe_malloc(row->rbsize); // その行を保存
+         memcpy(saved_hl, row->hl, row->rbsize);
          memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
          break;
       }
@@ -1427,7 +1507,7 @@ void editorFind() {
    char *query = editorPrompt("Search: %s (ESC to cancel, Arrows/Enter)",
                               editorFindCallBack);
    if (query) {
-      free(query);
+      safe_free(query);
    } else {
       E.cx = saved_cx;
       E.cy = saved_cy;
@@ -1459,7 +1539,7 @@ undoAPI *undoStackGetLast() {
 }
 
 undoAPI *stackPop(undoStack *stack) {
-   // 利用者側で free() することが想定されている
+   // 利用者側で safe_free() することが想定されている
    if (stack->length == 0) {
       return NULL;
    } else {
@@ -1478,7 +1558,7 @@ undoAPI *stackPop(undoStack *stack) {
 void undoAPIFree(undoAPI *api) {
    abFree(api->old_buf);
    abFree(api->new_buf);
-   free(api);
+   safe_free(api);
 }
 
 void stackClear(undoStack *stack) {
@@ -1501,21 +1581,19 @@ void editorUndo() {
    case UNDOTYPE_ROWEDIT:
       editorAssignRow(api->cy, api->old_buf->b, api->old_buf->len);
       break;
-   case UNDOTYPE_NEWLINE:
-      {
-         if (api->new_cy <= 0) {
-            // 次の行に移動
-            api->new_cy++;
-         }
-         erow *row = &E.row[api->new_cy];
-         // 前の行に残りを残して
-         editorRowAppendString(&E.row[api->new_cy - 1], row->chars, row->bsize);
-         // その行を消す
-         editorDelRow(api->new_cy);
-         editorUpdateRow(&E.row[api->new_cy - 1]);
-         E.cy = api->old_cy;
+   case UNDOTYPE_NEWLINE: {
+      if (api->new_cy <= 0) {
+         // 次の行に移動
+         api->new_cy++;
       }
-      break;
+      erow *row = &E.row[api->new_cy];
+      // 前の行に残りを残して
+      editorRowAppendString(&E.row[api->new_cy - 1], row->chars, row->bsize);
+      // その行を消す
+      editorDelRow(api->new_cy);
+      editorUpdateRow(&E.row[api->new_cy - 1]);
+      E.cy = api->old_cy;
+   } break;
    case UNDOTYPE_DELLINE: {
       erow *row;
       row = &E.row[api->new_cy];
@@ -1564,21 +1642,19 @@ void editorRedo() {
       // 更新
       editorUpdateRow(row);
    } break;
-   case UNDOTYPE_DELLINE:
-      {
-         if (api->old_cy <= 0) {
-            // 次の行に移動
-            api->old_cy++;
-         }
-         erow *row = &E.row[api->old_cy];
-         // 前の行に残りを残して
-         editorRowAppendString(&E.row[api->old_cy - 1], row->chars, row->bsize);
-         // その行を消す
-         editorDelRow(api->old_cy);
-         editorUpdateRow(&E.row[api->old_cy - 1]);
-         E.cy = api->new_cy;
+   case UNDOTYPE_DELLINE: {
+      if (api->old_cy <= 0) {
+         // 次の行に移動
+         api->old_cy++;
       }
-      break;
+      erow *row = &E.row[api->old_cy];
+      // 前の行に残りを残して
+      editorRowAppendString(&E.row[api->old_cy - 1], row->chars, row->bsize);
+      // その行を消す
+      editorDelRow(api->old_cy);
+      editorUpdateRow(&E.row[api->old_cy - 1]);
+      E.cy = api->new_cy;
+   } break;
    default:
       // ここに到達するはずはない
       die("editorRedo");
@@ -1638,7 +1714,7 @@ void abDeleteLastByte(struct abuf *ab) {
    }
 }
 
-void abFree(struct abuf *ab) { free(ab->b); }
+void abFree(struct abuf *ab) { safe_free(ab->b); }
 
 /*** output ***/
 // row offset と現状の帳尻を合わせる
@@ -1691,10 +1767,13 @@ void editorDrawRows(struct abuf *ab) {
          }
       } else {
          // ずらす
-         int len = E.row[filerow].rsize - E.coloff;
+         int len = E.row[filerow].rrsize - E.coloff;
          if (len > E.screencols)
             len = E.screencols;
+         // lenに対応するようにしないといけない
          len = editorRowRxBisectRight(&E.row[filerow], len);
+         len = editorRowRxToBx(&E.row[filerow], len);
+         editorSetStatusMessage("rx: %d bx: %d", &E.row[filerow].rrsize, len);
 
          // ポインタにしてやることでそのcoloff 以降全体を指すようになる
          // 略記法
@@ -1824,7 +1903,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
 /*** input ***/
 
 char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
-   // user がbuf をfree() することが期待されている
+   // user がbuf をsafe_free() することが期待されている
    size_t bufsize = 128;
    char *buf = safe_malloc(bufsize);
 
@@ -1846,7 +1925,7 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
          editorSetStatusMessage("");
          if (callback)
             callback(buf, c);
-         free(buf);
+         safe_free(buf);
          return NULL;
       } else if (c == '\r') {
          if (buflen != 0) {
@@ -1936,10 +2015,10 @@ void editorProcessKeypress() {
       stackClear(E.redoStack);
 
       for (int i = 0; i < E.numrows; i++) {
-         free(E.row[i].chars);
-         free(E.row[i].render);
+         safe_free(E.row[i].chars);
+         safe_free(E.row[i].render);
       }
-      free(E.row);
+      safe_free(E.row);
       termsend("\x1b[2J", 4);
       termsend("\x1b[H", 3);
       exit(0);
@@ -1955,7 +2034,7 @@ void editorProcessKeypress() {
 
    case END_KEY:
       if (E.cy < E.numrows) {
-         E.cx = E.row[E.cy].rsize;
+         E.cx = E.row[E.cy].csize;
       }
       break;
 
