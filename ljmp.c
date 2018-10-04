@@ -279,6 +279,8 @@ void stackClear(undoStack *stack);
 void abAppend(struct abuf *ab, const char *s, int len);
 void abFree(struct abuf *ab);
 void abAssign(struct abuf *ab, const char *s, int len);
+#define max(a, b) ((a > b) ? a : b)
+#define min(a, b) ((a < b) ? a : b)
 /*** terminal ***/
 
 void die(const char *s) {
@@ -1723,11 +1725,16 @@ void editorComplete() {
    } else if (E.syntax != NULL) {
       // たぶん動かない
       char** fp = E.syntax->keywords;
-      while (*++fp != NULL) {
+      while (*fp++ != NULL) {
          if (fp && strncmp(*fp, &E.row[E.cy].chars[i], E.bx - i) == 0) {
             strcpy(&completechars[i], *fp);
-            //editorRowInsertString(&E.row[E.cy], E.bx, &(*fp[E.bx-i]), strlen(fp) - (E.bx-i)); // 日本語未対応
-            editorRowAssignString(&E.row[E.cy], completechars, strlen(completechars));
+            if (*fp[strlen(*fp)-1-1] == '|') {// 型に関係するやつ
+               editorRowInsertString(&E.row[E.cy], E.bx, &(*fp)[E.bx-i], strlen(*fp) - min(E.bx-i-1, 0)); // 日本語未対応
+            } else {
+               editorRowInsertString(&E.row[E.cy], E.bx, &(*fp)[E.bx-i], strlen(*fp) - (E.bx-i)); // 日本語未対応
+            }
+
+            //editorRowAssignString(&E.row[E.cy], completechars, strlen(completechars));
             E.cx = 1000; // 日本語未対応
             editorSetStatusMessage("Complete Opt Case2: %s E-bx: %d i: %d", completechars, E.bx, i);
             return;
