@@ -177,6 +177,7 @@ struct editorSyntax {
    char *filetype;   // ステータスバーの表示名
    char **filematch; // ファイル拡張子などのマッチパターン
    char **keywords;
+   int keywords_number;
    char *singleline_comment_start;
    char *multiline_comment_start;
    char *multiline_comment_end;
@@ -252,12 +253,18 @@ char *MARKDOWN_HL_extensions[] = {".markdown", ".md", ".mkd", NULL};
 char *MARKDOWN_HL_keywords[] = {NULL};
 
 struct editorSyntax HLDB[] = {
-    {"c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/",
+    {"c", C_HL_extensions, C_HL_keywords,
+     // ここで -1 が付くのは、最後のNULL を除くため
+     // やっぱやめ
+     sizeof(C_HL_keywords) / sizeof(C_HL_keywords[0]), "//", "/*", "*/",
      HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
     // Python に複数行コメントはない. "" とすることで、無視できる.
-    {"python", PYTHON_HL_extensions, PYTHON_HL_keywords, "#", "", "",
+    {"python", PYTHON_HL_extensions, PYTHON_HL_keywords,
+     sizeof(PYTHON_HL_keywords) / sizeof(PYTHON_HL_keywords[0]), "#", "", "",
      HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
-    {"markdown", MARKDOWN_HL_extensions, MARKDOWN_HL_keywords, "", "", "", 0}};
+    {"markdown", MARKDOWN_HL_extensions, MARKDOWN_HL_keywords,
+     sizeof(MARKDOWN_HL_keywords) / sizeof(MARKDOWN_HL_keywords[0]), "", "", "",
+     0}};
 
 // エントリ数
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
@@ -266,7 +273,8 @@ void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 void editorRowAssignString(erow *row, char *s, size_t len);
 void editorRowInsertChar(erow *row, int at, char c);
-void editorRowInsertString(erow *row, int at, const char* str, size_t str_length);
+void editorRowInsertString(erow *row, int at, const char *str,
+                           size_t str_length);
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 undoAPI *undoStackGetLast();
 undoAPI *stackPop(undoStack *stack);
@@ -1041,9 +1049,10 @@ void editorRowAssignString(erow *row, char *s, size_t len) {
    E.dirty++;
 }
 
-void editorRowInsertString(erow *row, int at, const char* str, size_t str_length) {
-   for (unsigned long i=0;i<str_length;i++) {
-      editorRowInsertChar(row, at+i, str[i]);
+void editorRowInsertString(erow *row, int at, const char *str,
+                           size_t str_length) {
+   for (unsigned long i = 0; i < str_length; i++) {
+      editorRowInsertChar(row, at + i, str[i]);
    }
 }
 
@@ -1706,42 +1715,85 @@ void editorPaste() {
 /*** complete features. ***/
 
 void editorComplete() {
-   int i = E.bx-1;
+   static int complete_i = -1;
+   static int complete_cy = -1;
+   static int complete_index = 1;
+   static int complete_ebx =
+       -1; // E.bx のはずが、継続補完の場合は別になる. その補完開始位置
+   int i = E.bx - 1;
+   int search_index = 0;
    char completechars[128];
    strcpy(completechars, E.row[E.cy].chars);
-   while(i > 0) {
+   // 補完の文字区切りの起点を探す
+   while (i > 0) {
       if (is_separator(E.row[E.cy].chars[i])) {
          break;
       }
       i--;
    }
-   if (i > 0) i++; // 要するに端の文字は空白ではなく、補完候補に加える
+   if (i > 0)
+      i++; // 要するに端の文字は空白ではなく、補完候補に加える
+   if (E.cy == complete_cy && i == complete_i) {
+      // FIXME: 本来は問題がある. 補完していじって再び補完すると順番が狂う
+      // 継続的補完だということ
+      search_index = complete_index + 1; // 「次」のものから探すべき
+   } else {
+      complete_cy = E.cy;
+      complete_i = i;
+      complete_index = 1; // 設定する必要はない、はず
+      complete_ebx = E.bx;
+   }
 
+   // 補完候補探索
    if (E.syntax != NULL && (E.bx - i <= 1)) {
+      // とりあえず最初のものを補完候補にする
       strcpy(&completechars[i], E.syntax->keywords[0]);
       editorRowAssignString(&E.row[E.cy], completechars, strlen(completechars));
-      editorSetStatusMessage("Complete Opt Case1: %s E-bx: %d i: %d", completechars, E.bx, i);
+      editorSetStatusMessage("Complete Opt Case1: %s E-bx: %d i: %d",
+                             completechars, complete_ebx, i);
       return;
    } else if (E.syntax != NULL) {
-      // たぶん動かない
-      char** fp = E.syntax->keywords;
-      while (*fp++ != NULL) {
-         if (fp && strncmp(*fp, &E.row[E.cy].chars[i], E.bx - i) == 0) {
-            strcpy(&completechars[i], *fp);
-            if (*fp[strlen(*fp)-1-1] == '|') {// 型に関係するやつ
-               editorRowInsertString(&E.row[E.cy], E.bx, &(*fp)[E.bx-i], strlen(*fp) - min(E.bx-i-1, 0)); // 日本語未対応
+      // E.syntax->keywords の要素数が分からないので一周したか否かの判定が困難
+      for (int j = 0; j < E.syntax->keywords_number; j++) {
+         // 事情により1番の要素から探索するようになっている
+         // TODO: ナルポなりそう...?
+         if (E.syntax->keywords[search_index] &&
+             strncmp(E.syntax->keywords[search_index], &E.row[E.cy].chars[i],
+                     complete_ebx - i) == 0) {
+            strcpy(&completechars[i], E.syntax->keywords[search_index]);
+            complete_index = search_index;
+            if (E.syntax->keywords[search_index]
+                                  [strlen(E.syntax->keywords[search_index]) -
+                                   1 - 1] == '|') { // 型に関係するやつ
+               editorRowInsertString(
+                   &E.row[E.cy], complete_ebx,
+                   &(E.syntax->keywords[search_index][complete_ebx - i]),
+                   strlen(E.syntax->keywords[search_index]) -
+                       min(complete_ebx - i - 1, 0)); // 日本語未対応
             } else {
-               editorRowInsertString(&E.row[E.cy], E.bx, &(*fp)[E.bx-i], strlen(*fp) - (E.bx-i)); // 日本語未対応
+               editorRowInsertString(
+                   &E.row[E.cy], complete_ebx,
+                   &(E.syntax->keywords[search_index][complete_ebx - i]),
+                   strlen(E.syntax->keywords[search_index]) -
+                       (complete_ebx - i)); // 日本語未対応
             }
 
-            //editorRowAssignString(&E.row[E.cy], completechars, strlen(completechars));
-            E.cx = 1000; // 日本語未対応
-            editorSetStatusMessage("Complete Opt Case2: %s E-bx: %d i: %d", completechars, E.bx, i);
+            // editorRowAssignString(&E.row[E.cy], completechars,
+            // strlen(completechars));
+            E.cx = i + strlen(completechars); // 日本語未対応
+            editorSetStatusMessage("Complete Opt Case2: %s E-bx: %d i: %d",
+                                   completechars, complete_ebx, i);
+            complete_index = search_index;
             return;
+         }
+         search_index++;
+         if (E.syntax->keywords[search_index] == NULL) {
+            search_index = 0;
          }
       }
    }
-   editorSetStatusMessage("No Complete Found. %s %d %d", completechars, E.bx, i);
+   editorSetStatusMessage("No Complete Found. %s %d %d", completechars, E.bx,
+                          i);
 }
 
 /*** append buffer ***/
@@ -1828,7 +1880,8 @@ void editorDrawRows(struct abuf *ab) {
          len = editorRowRxBisectRight(&E.row[filerow], len);
          len = editorRowRxToBx(&E.row[filerow], len);
          // FIXME
-         // editorSetStatusMessage("rx: %d bx: %d", &E.row[filerow].rrsize, len);
+         // editorSetStatusMessage("rx: %d bx: %d", &E.row[filerow].rrsize,
+         // len);
 
          // ポインタにしてやることでそのcoloff 以降全体を指すようになる
          // 略記法
@@ -2258,8 +2311,8 @@ int main(int argc, char *argv[]) {
       editorOpenWithFilename(argv[1]);
    }
 
-   editorSetStatusMessage(
-       "(Ctrl+)O:open S:save Q:quit F:find Z:undo Y:redo C:copy X:cut V:paste P:complete");
+   editorSetStatusMessage("(Ctrl+)O:open S:save Q:quit F:find Z:undo Y:redo "
+                          "C:copy X:cut V:paste P:complete");
 
    while (1) {
       editorRefreshScreen();
