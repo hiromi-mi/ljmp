@@ -275,6 +275,8 @@ void editorRowAssignString(erow *row, char *s, size_t len);
 void editorRowInsertChar(erow *row, int at, char c);
 void editorRowInsertString(erow *row, int at, const char *str,
                            size_t str_length);
+void editorRowDelString(erow *row, int at, size_t str_length);
+void editorRowDelChar(erow *row, int at);
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 undoAPI *undoStackGetLast();
 undoAPI *stackPop(undoStack *stack);
@@ -1080,6 +1082,12 @@ void editorRowInsertChar(erow *row, int at, char c) {
    E.dirty++;
 }
 
+void editorRowDelString(erow *row, int at, size_t str_length) {
+   for (unsigned long i = 0; i < str_length; i++) {
+      editorRowDelChar(row, at);
+   }
+}
+
 void editorRowDelChar(erow *row, int at) {
    // 1文字消す
    if (at < 0 || at > row->bsize)
@@ -1720,6 +1728,7 @@ void editorComplete() {
    static int complete_index = 1;
    static int complete_ebx =
        -1; // E.bx のはずが、継続補完の場合は別になる. その補完開始位置
+   static int complete_strlen = -1;
    int i = E.bx - 1;
    int search_index = 0;
    char completechars[128];
@@ -1737,6 +1746,7 @@ void editorComplete() {
       // FIXME: 本来は問題がある. 補完していじって再び補完すると順番が狂う
       // 継続的補完だということ
       search_index = complete_index + 1; // 「次」のものから探すべき
+      editorRowDelString(&E.row[E.cy], complete_ebx, complete_strlen);
    } else {
       complete_cy = E.cy;
       complete_i = i;
@@ -1765,24 +1775,22 @@ void editorComplete() {
             if (E.syntax->keywords[search_index]
                                   [strlen(E.syntax->keywords[search_index]) -
                                    1 - 1] == '|') { // 型に関係するやつ
-               editorRowInsertString(
-                   &E.row[E.cy], complete_ebx,
-                   &(E.syntax->keywords[search_index][complete_ebx - i]),
-                   strlen(E.syntax->keywords[search_index]) -
-                       min(complete_ebx - i - 1, 0)); // 日本語未対応
+               complete_strlen = strlen(E.syntax->keywords[search_index]) -
+                       min(complete_ebx - i - 1, 0); // 日本語未対応
             } else {
-               editorRowInsertString(
-                   &E.row[E.cy], complete_ebx,
-                   &(E.syntax->keywords[search_index][complete_ebx - i]),
-                   strlen(E.syntax->keywords[search_index]) -
-                       (complete_ebx - i)); // 日本語未対応
+               complete_strlen = strlen(E.syntax->keywords[search_index]) -
+                       (complete_ebx - i); // 日本語未対応
             }
+            editorRowInsertString(
+                  &E.row[E.cy], complete_ebx,
+                  &(E.syntax->keywords[search_index][complete_ebx - i]),
+                  complete_strlen);
 
             // editorRowAssignString(&E.row[E.cy], completechars,
             // strlen(completechars));
             E.cx = i + strlen(completechars); // 日本語未対応
-            editorSetStatusMessage("Complete Opt Case2: %s E-bx: %d i: %d",
-                                   completechars, complete_ebx, i);
+            editorSetStatusMessage("Complete Opt Case2: %s E-bx: %d i: %d complete_ebx: %d complete_i: %d",
+                                   completechars, complete_ebx, i, complete_ebx, complete_i);
             complete_index = search_index;
             return;
          }
