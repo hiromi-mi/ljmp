@@ -213,7 +213,7 @@ struct editorConfig {
    erow *row;        // 実際の内容
    int dirty;
    char *filename;
-   char statusmsg[80];
+   char statusmsg[160];
    time_t statusmsg_time;
    struct editorSyntax *syntax;
    struct termios orig_termios;
@@ -485,6 +485,11 @@ int getWindowSize(int *rows, int *cols) {
 int is_separator(int c) {
    // strchr で出現位置を表せる
    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
+// 補完の場合. / を区切り文字としてしまうとファイル名補完まわりで問題.
+int is_separator_for_complete(int c) {
+   return isspace(c) || c == '\0' || strchr(",.()+-*=~%<>[];", c) != NULL;
 }
 
 void editorUpdateSyntax(erow *row) {
@@ -1735,7 +1740,7 @@ void editorComplete() {
    strcpy(completechars, E.row[E.cy].chars);
    // 補完の文字区切りの起点を探す
    while (i > 0) {
-      if (is_separator(E.row[E.cy].chars[i])) {
+      if (is_separator_for_complete(E.row[E.cy].chars[i])) {
          break;
       }
       i--;
@@ -1799,6 +1804,8 @@ void editorComplete() {
             search_index = 0;
          }
       }
+   } else {
+      // Syntax が存在しないとき. ファイル名補完.
    }
    editorSetStatusMessage("No Complete Found. %s %d %d", completechars, E.bx,
                           i);
@@ -2319,8 +2326,8 @@ int main(int argc, char *argv[]) {
       editorOpenWithFilename(argv[1]);
    }
 
-   editorSetStatusMessage("(Ctrl+)O:open S:save Q:quit F:find Z:undo Y:redo "
-                          "C:copy X:cut V:paste P:complete");
+   editorSetStatusMessage("(Ctrl+)O:Open S:Save Q:Quit F:Find Z:undo Y:redo "
+                          "C:Copy X:cut V:paste P:comPlete");
 
    while (1) {
       editorRefreshScreen();
