@@ -1892,7 +1892,7 @@ void editorDrawRows(struct abuf *ab) {
          if (len > E.screencols)
             len = E.screencols;
          // lenに対応するようにしないといけない
-         len = editorRowRxBisectRight(&E.row[filerow], len);
+         //len = editorRowRxBisectRight(&E.row[filerow], len);
          len = editorRowRxToBx(&E.row[filerow], len);
          // FIXME
          // editorSetStatusMessage("rx: %d bx: %d", &E.row[filerow].rrsize,
