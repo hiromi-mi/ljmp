@@ -1781,21 +1781,23 @@ void editorComplete() {
                                   [strlen(E.syntax->keywords[search_index]) -
                                    1 - 1] == '|') { // 型に関係するやつ
                complete_strlen = strlen(E.syntax->keywords[search_index]) -
-                       min(complete_ebx - i - 1, 0); // 日本語未対応
+                                 min(complete_ebx - i - 1, 0); // 日本語未対応
             } else {
                complete_strlen = strlen(E.syntax->keywords[search_index]) -
-                       (complete_ebx - i); // 日本語未対応
+                                 (complete_ebx - i); // 日本語未対応
             }
             editorRowInsertString(
-                  &E.row[E.cy], complete_ebx,
-                  &(E.syntax->keywords[search_index][complete_ebx - i]),
-                  complete_strlen);
+                &E.row[E.cy], complete_ebx,
+                &(E.syntax->keywords[search_index][complete_ebx - i]),
+                complete_strlen);
 
             // editorRowAssignString(&E.row[E.cy], completechars,
             // strlen(completechars));
             E.cx = i + strlen(completechars); // 日本語未対応
-            editorSetStatusMessage("Complete Opt Case2: %s E-bx: %d i: %d complete_ebx: %d complete_i: %d",
-                                   completechars, complete_ebx, i, complete_ebx, complete_i);
+            editorSetStatusMessage("Complete Opt Case2: %s E-bx: %d i: %d "
+                                   "complete_ebx: %d complete_i: %d",
+                                   completechars, complete_ebx, i, complete_ebx,
+                                   complete_i);
             complete_index = search_index;
             return;
          }
@@ -1892,7 +1894,7 @@ void editorDrawRows(struct abuf *ab) {
          if (len > E.screencols)
             len = E.screencols;
          // lenに対応するようにしないといけない
-         //len = editorRowRxBisectRight(&E.row[filerow], len);
+         // len = editorRowRxBisectRight(&E.row[filerow], len);
          len = editorRowRxToBx(&E.row[filerow], len);
          // FIXME
          // editorSetStatusMessage("rx: %d bx: %d", &E.row[filerow].rrsize,
