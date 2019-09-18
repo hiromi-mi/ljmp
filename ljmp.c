@@ -8,8 +8,8 @@
  * (Begin of License)
  *
  * Copyright (c) 2016, Salvatore Sanfilippo <antirez at gmail dot com>
- * (Extended by) Copyright (c) 2018, hiromi-mi <hiromi(hyphen)mi (at) cat (dot)
- * zaq (dot) jp>
+ * (Extended by) Copyright (c) 2018, 2019 hiromi-mi
+ * <hiromi(hyphen)mi (at) cat (dot) zaq (dot) jp>
  *
  * All rights reserved.
  *
