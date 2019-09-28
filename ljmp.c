@@ -735,69 +735,6 @@ int editorRowCxToBxRx(erow *row, const int cx, int *save_bx, int *save_rx) {
    return bx;
 }
 
-int editorRowBxCxRxToBxCxRx(erow *row, int bcr, int *optional_bx,
-                            int *optional_cx, int *optional_rx) {
-   int cur_cx = 0;
-   int bx = 0;
-   int cur_bx = 0;
-   int width;
-   wchar_t chr;
-   int rx = 0;
-   for (cur_cx = 0;; cur_cx++) {
-      if (row->chars[cur_bx] == '\t') {
-         // タブ文字
-         rx += (LJMP_TAB_STOP) - (rx % LJMP_TAB_STOP);
-         cur_bx += 1;
-         continue;
-      }
-
-      // コードポイントのバイト数 see utf-8 (7)
-      if ((row->chars[cur_bx] & 0x80) == 0) { // 0xxxxxxx
-         chr = row->chars[cur_bx];
-         cur_bx += 1;
-      } else if ((row->chars[cur_bx] & 0xE0) == 0xC0) {
-         // 110xxxxx
-         chr = ((row->chars[cur_bx] & 0x1F) << 6) +
-               (row->chars[cur_bx + 1] & 0x3F);
-         cur_bx += 2;
-      } else if ((row->chars[cur_bx] & 0xF0) == 0xE0) {
-         // 1110xxxx
-         chr = ((row->chars[cur_bx] & 0x0F) << 12) +
-               ((row->chars[cur_bx + 1] & 0x3F) << 6) +
-               (row->chars[cur_bx + 2] & 0x3F);
-         cur_bx += 3;
-      } else if ((row->chars[cur_bx] & 0xF8) == 0xF0) {
-         // 11110xxx
-         chr = ((row->chars[cur_bx] & 0x07) << 18) +
-               ((row->chars[cur_bx + 1] & 0x3F) << 12) +
-               ((row->chars[cur_bx + 2] & 0x3F) << 6) +
-               (row->chars[cur_bx + 3] & 0x3F);
-         cur_bx += 4;
-      } else {
-         // Incorrect Sequence. Treat as Binary.
-         chr = row->chars[cur_bx];
-         cur_bx += 1;
-      }
-      // https://www.unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt
-      // これが本来必要かもしれない
-      width = wcwidth(chr);
-      if (width >= 0) {
-         rx += width;
-      }
-      // width < 0 when unprintable chars
-      if (cur_bx > bx) {
-         break;
-      }
-   }
-   if (optional_rx != NULL) {
-      *optional_rx = rx;
-   }
-   if (optional_cx != NULL) {
-      *optional_cx = cur_cx;
-   }
-   return cur_cx;
-}
-
 int editorRowBxToCxRx(erow *row, int bx, int *optional_cx, int *optional_rx) {
    int cur_cx = 0;
    int cur_bx = 0;
